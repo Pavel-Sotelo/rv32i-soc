@@ -46,3 +46,57 @@ Design decisions for each module.
   register being written returns the OLD value;** the new value lands one cycle
   later. This is the read-during-write hazard that forwarding addresses in the
   pipeline (Step 8).
+
+## Instruction Memory
+
+- **BRAM storage, not flip-flops.** 256 words x 32 bits would cost ~8,000
+  flip-flops out of ~40,000 on the Artix-7 — too large a share of the chip for
+  one memory. BRAM stores it in dedicated blocks at zero flip-flop cost. The
+  same size argument as the register file, but the opposite conclusion, because
+  the access pattern differs (see below).
+
+- **Synchronous read — a consequence of BRAM, not a preference.** BRAM's output
+  is registered by construction (the SRAM read result is sensed, regenerated to
+  full strength, and captured in an output register). So the instruction appears
+  one cycle after the address is presented. This 1-cycle latency is absorbed by
+  the fetch pipeline stage. The registered output also keeps the combinational
+  path short, which helps Fmax.
+
+- **Why BRAM here but flip-flops for the register file.** Instruction memory
+  needs only one access per cycle (a single fetch) and tolerates 1-cycle
+  latency, so BRAM fits. The register file needs three simultaneous accesses
+  (2 reads + 1 write) and combinational reads — BRAM offers only 2 ports and
+  cannot read combinationally, so it must be flip-flops. Two independent reasons
+  push each memory to opposite implementations.
+
+- **BRAM is inferred, not instantiated.** The module describes a clocked read of
+  a memory array; the synthesis tool recognizes that pattern and maps it onto a
+  BRAM block. No vendor primitive or IP is instantiated, which keeps the design
+  portable. (Explicit instantiation via the Block Memory Generator or xpm_memory
+  is possible but was deliberately avoided for portability.)
+
+- **Byte address to word index (`addr[9:2]`).** The PC counts in bytes (0, 4, 8,
+  12...) because instructions are 4 bytes apart; the memory array is indexed by
+  word (0, 1, 2, 3...). Converting means dropping the bottom 2 bits of the
+  address — they are always 00 for aligned instructions and carry no
+  information. This is a division by 4 that costs nothing in hardware (just wire
+  up the upper bits). For 256 words the index is 8 bits: `addr[9:2]` (start at
+  bit 2 to drop the byte offset, 8 bits wide to reach 256 words).
+
+- **No reset.** It is a ROM: it comes up pre-loaded with the program via
+  `$readmemh` before cycle 0. A reset that cleared the array would destroy the
+  program, so there is no reset port. (The register file needed a reset because
+  it is working storage that starts empty; instruction memory starts full.)
+
+- **Program loaded with `$readmemh` in an `initial` block.** The program is a
+  hex text file (one 32-bit instruction per line); `$readmemh` reads it into the
+  array at time 0 — line 1 to slot 0, line 2 to slot 1, and so on. `initial`
+  fits because loading is a one-time setup action. This works in both simulation
+  and synthesis (it sets the BRAM's power-up contents on the FPGA).
+
+- **Parameterized program filename (`parameter string PROGRAM`).** The hex
+  filename is a module parameter with a default, so a testbench can load a
+  different program without editing the module. The testbench instantiated the
+  module with the same default program, so no override was needed this time,
+  but the parameter is there so future testbenches can load different programs
+  without touching the module. 

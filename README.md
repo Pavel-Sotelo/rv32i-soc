@@ -12,7 +12,7 @@ register and memory state.
 ## Progress
 - [x] ALU — RV32I integer ops (ADD, SUB, AND, OR, XOR, SLL, SRL, SRA, SLT, SLTU), 9-case testbench
 - [x] Register file (32×32, 2 read / 1 write, x0 hardwired)
-- [ ] Instruction memory
+- [x] Instruction memory
 - [ ] Instruction-set simulator (C reference model)
 - [ ] Decode / control
 - [ ] Datapath integration (single program running)
