@@ -13,7 +13,8 @@ register and memory state.
 - [x] ALU — RV32I integer ops (ADD, SUB, AND, OR, XOR, SLL, SRL, SRA, SLT, SLTU), 9-case testbench
 - [x] Register file (32×32, 2 read / 1 write, x0 hardwired)
 - [x] Instruction memory
-- [ ] Instruction-set simulator (C reference model)
+- [x] ISS skeleton (C reference model) — CPUState, fetch/decode/execute, R-type + I-type arithmetic
+- [ ] ISS complete — loads, stores, branches, jumps
 - [ ] Decode / control
 - [ ] Datapath integration (single program running)
 - [ ] Co-simulation (RTL vs ISS)

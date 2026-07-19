@@ -99,4 +99,77 @@ Design decisions for each module.
   different program without editing the module. The testbench instantiated the
   module with the same default program, so no override was needed this time,
   but the parameter is there so future testbenches can load different programs
-  without touching the module. 
+  without touching the module.
+
+## Instruction Set Simulator (ISS)
+
+The ISS is a C reference model of the same CPU: the identical fetch/decode/execute
+loop expressed in software instead of hardware. Its purpose is to be a *golden
+model* — a trusted answer key that the RTL can be compared against, instruction by
+instruction, during co-simulation (Step 7). It is deliberately slow and
+inspectable rather than fast, because a reference model's value is trustworthiness,
+not speed.
+
+- **`uint32_t` for registers and instructions, not `int`.** `int` has no
+  guaranteed width, but RV32I registers are exactly 32 bits. Exact-width types
+  make the ISS wrap and truncate identically to the hardware. Unsigned is used
+  because unsigned overflow is well-defined in C (wraps mod 2^32, exactly like
+  bits falling off a register), while signed overflow is undefined behavior — a
+  reference model that could vary by compiler or optimization level would be
+  worthless.
+
+- **Signedness applied per-operation, not globally.** Registers store raw bits as
+  `uint32_t`; only the operations that need signed interpretation cast at the
+  point of use — `(int32_t)` for SLT/SLTI and for SRA/SRAI's arithmetic shift.
+  This is the same rule as the ALU: the bits are neutral, the instruction decides
+  how to read them.
+
+- **C has one `>>`; SystemVerilog has two.** SystemVerilog distinguishes `>>`
+  (logical) from `>>>` (arithmetic). C has only `>>`, and which behavior you get
+  depends on the operand's type — unsigned shifts in zeros, signed shifts in the
+  sign bit. So SRL/SRLI shift the `uint32_t` directly, and SRA/SRAI cast to
+  `int32_t` first.
+
+- **Immediates are sign-extended in decode, once.** `(int32_t)instruction >> 20`
+  extracts bits 31:20 and sign-extends in a single operation: the cast makes the
+  shift arithmetic, so the vacated top bits are filled with copies of bit 31. This
+  works because RISC-V deliberately places every immediate's sign bit at bit 31 —
+  the ISA is designed so sign extension is free. No mask is applied afterward, as
+  that would erase the extension. `imm` is stored as `int32_t`; SLTIU casts it
+  back to unsigned, matching the spec's "sign-extend first, compare unsigned".
+
+- **Shift amounts masked to 5 bits.** Both register-sourced (R-type) and
+  immediate-sourced (I-type) shift amounts are masked with `& 0x1F`, mirroring the
+  ALU's `b[4:0]`. For I-type shifts this also isolates the shift amount from the
+  upper immediate bits, which RISC-V reuses as a funct7-equivalent to distinguish
+  SRLI from SRAI.
+
+- **x0 enforced centrally, once per instruction.** Rather than guarding every
+  write site (which would need a duplicated check in each execute path and would
+  break instructions whose side effects matter even when rd is x0), `regs[0]` is
+  reset to zero at the end of each loop iteration. Different mechanism from the
+  RTL (which forces it at the read port) but the same guarantee, and it covers
+  every instruction path automatically.
+
+- **PC incremented before execute.** The default next PC is PC+4, applied before
+  the execute step, so a branch or jump can simply overwrite `pc` and have its
+  write win. This mirrors the hardware, where PC+4 is the default and control-flow
+  instructions override it.
+
+- **State zero-initialized at startup (`CPUState cpu_state = {0}`).** C gives no
+  guarantee about uninitialized memory, so registers would otherwise hold stack
+  garbage — the software equivalent of the X's the RTL register file's reset
+  exists to eliminate. Zeroing the whole struct gives the ISS a known starting
+  state.
+
+- **Instruction cap as a diagnostic.** Execution stops after a fixed number of
+  instructions and reports the count and PC. Once branches exist, a buggy program
+  can loop forever; without a cap the ISS simply hangs and teaches nothing. The
+  cap converts a hang into a message that says where it was spinning.
+
+- **Decode grouped by format, execute dispatched by opcode.** Several opcodes
+  share the I-type layout (0x03 loads and 0x13 immediate arithmetic slice
+  identically), so they share one decode routine via fall-through case labels.
+  Execute then switches on the opcode separately, because those same fields drive
+  completely different behavior. This reflects the ISA: the opcode picks the
+  format for decode, and the instruction family for execute.
