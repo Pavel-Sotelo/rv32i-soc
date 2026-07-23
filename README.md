@@ -24,13 +24,20 @@ register and memory state.
 - [ ] AXI4-Lite integration (CPU ↔ UART)
 
 ## Architecture
-Harvard architecture — instruction and data memories are two separate BRAM blocks,
-so instruction fetch and data access don't contend for a single memory port.
+Harvard architecture — instruction and data memories are two separate BRAM blocks, so
+instruction fetch and data access don't contend for a single memory port.
+
+**Three stages (IF/ID, EX, WB)** rather than the textbook five. Fewer stages mean fewer
+data hazards to resolve and a shorter branch penalty (~1 cycle), which gets a correct,
+working CPU sooner. A five-stage upgrade is planned, at which point branch prediction
+becomes worth adding — in a three-stage pipeline the penalty is small enough that a
+predictor recovers almost nothing.
 
 ## Structure
 - `rtl/` — SystemVerilog source
-- `tb/`  — testbenches
+- `tb/` — testbenches
 - `iss/` — C instruction-set simulator (golden reference model)
+- `programs/` — hex programs loaded into instruction memory
 - `docs/` — design notes and bug logs
 
 ## Target
