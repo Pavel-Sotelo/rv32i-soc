@@ -15,7 +15,7 @@ register and memory state.
 - [x] Instruction memory (BRAM ROM, $readmemh program load)
 - [x] ISS skeleton (C reference model) — CPUState, fetch/decode/execute, R-type + I-type arithmetic
 - [x] IF stage — PC register, fetch logic, branch/jump target mux
-- [ ] ID stage — control unit, immediate generator (all 6 formats), register file read
+- [x] ID stage — control unit, immediate generator (all 6 formats), register file read
 - [ ] ISS complete — loads, stores, branches, jumps
 - [ ] EX + WB stages (single program running)
 - [ ] Co-simulation (RTL vs ISS)
