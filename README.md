@@ -12,11 +12,12 @@ register and memory state.
 ## Progress
 - [x] ALU — RV32I integer ops (ADD, SUB, AND, OR, XOR, SLL, SRL, SRA, SLT, SLTU), 9-case testbench
 - [x] Register file (32×32, 2 read / 1 write, x0 hardwired)
-- [x] Instruction memory
+- [x] Instruction memory (BRAM ROM, $readmemh program load)
 - [x] ISS skeleton (C reference model) — CPUState, fetch/decode/execute, R-type + I-type arithmetic
+- [x] IF stage — PC register, fetch logic, branch/jump target mux
+- [ ] ID stage — control unit, immediate generator (all 6 formats), register file read
 - [ ] ISS complete — loads, stores, branches, jumps
-- [ ] Decode / control
-- [ ] Datapath integration (single program running)
+- [ ] EX + WB stages (single program running)
 - [ ] Co-simulation (RTL vs ISS)
 - [ ] Pipelining + forwarding
 - [ ] Timing closure / Fmax
