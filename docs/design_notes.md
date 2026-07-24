@@ -173,3 +173,190 @@ not speed.
   Execute then switches on the opcode separately, because those same fields drive
   completely different behavior. This reflects the ISA: the opcode picks the
   format for decode, and the instruction family for execute.
+
+## PC (Program Counter)
+
+- **Reset is a must here, unlike instruction memory.** The PC is a flip-flop with
+  no other initialization path — at power-up it holds garbage, and the CPU would
+  fetch from a random address. Instruction memory needs no reset because `$readmemh`
+  loads it before cycle 0; the PC has no equivalent, so reset is the only way it
+  gets a defined starting value (byte address 0, the first instruction).
+
+- **Synchronous reset.** The clock always runs on the FPGA and reset comes from a
+  button, not a power-on condition, so a synchronous reset is sufficient. It keeps
+  timing analysis simple (reset is just another synchronous input) and avoids the
+  asynchronous de-assert metastability problem. Consistent with the register file.
+
+- **Pure register, no adder or mux inside.** The PC only stores whatever address it
+  is given; computing the next address (PC+4 vs. a branch/jump target) lives in the
+  fetch stage above it. Same separation as the ALU, which doesn't contain the mux
+  selecting its own operands. This keeps the PC trivially testable in isolation —
+  drive a value, check it latches.
+
+## IF Stage (Instruction Fetch)
+
+- **Contains the PC, the +4 adder, the target mux, and the instruction memory.**
+  The fetch loop is closed inside this module: PC output → +4 → mux → PC input, with
+  the PC output also driving the memory's address.
+
+- **One selector and one address handle both branches and jumps.** `use_target` and
+  `pc_target` are inputs, not something IF computes. IF has no idea what a branch is;
+  it is a dumb mux that loads `pc_target` when told to. The decision is made in EX
+  (branches compare first, jumps are unconditional) and travels backward to IF,
+  because IF is where the PC physically lives and therefore the only place it can be
+  written. Branch and jump share these wires because from the PC's point of view they
+  are the same action — the conditional/unconditional distinction is resolved upstream.
+
+- **This backward flow is the source of the branch penalty.** By the time EX resolves
+  a branch, IF has already fetched the next sequential instruction, which must be
+  discarded. In a 3-stage pipeline that costs ~1 cycle — small enough that branch
+  prediction is deferred (see the architecture note in the README).
+
+- **`out_current_pc` is registered, not a direct wire.** The instruction arrives one
+  cycle after its address is presented (BRAM's registered read), so a combinational
+  PC output would be one cycle *ahead* of its instruction — EX would pair an
+  instruction with the wrong PC and compute branch targets against it. Registering
+  the PC delays it by exactly the memory's latency so the two travel together. This
+  is a pipeline register in miniature, built early because IF is otherwise not
+  self-consistent.
+
+- **Why the PC (not `next_pc`) is what travels downstream.** Branch and jump targets
+  are PC-relative: `target = current_pc + offset`. Using `next_pc` would be circular,
+  since that is the value being computed. `jal` also needs `PC+4` as its return
+  address, which EX derives from `current_pc`, so one output covers both needs.
+
+- **Startup fill and reset interaction (known quirk).** Reset holds the PC steady but
+  does not stop the instruction memory clocking, so the two can drift out of step at
+  startup depending on how long reset is asserted. `tb_if_stage` requires an extra
+  reset cycle for the address-0 read to be observable before the PC advances;
+  `tb_if_id` does not. The RTL is correct in both cases — this is about when the
+  first fetch is observable, not about the design. **Root cause of the difference
+  between the two testbenches is not yet determined; open item to revisit.** In the
+  full pipeline this disappears, because stall control freezes the PC and the memory
+  together rather than only the PC (Step 8).
+
+## Control Unit
+
+- **Pure combinational, no clock, no state.** Opcode in, control signals out. It is a
+  lookup table implemented in logic: each instruction maps to one fixed configuration
+  of the datapath's muxes and enables.
+
+- **The datapath/control split.** Everything else in the design is datapath — things
+  that hold, move, or transform data. Control touches no data; it produces the switch
+  settings that determine *which paths are active*. This is what makes a fixed
+  datapath general-purpose: the same wires and the same ALU run `add` one cycle and
+  `lw` the next, because control reconfigures them.
+
+- **Switches on opcode, not format.** Several opcodes share a bit layout but behave
+  differently — `0x03` (loads) and `0x13` (immediate arithmetic) are both I-format,
+  but only one touches memory. Format determines *layout* (the immediate generator's
+  concern); opcode determines *behavior* (the control unit's). One `case` branch per
+  opcode, with all instructions in that group sharing the same control signals.
+
+- **`alu_op` is derived, not a constant.** For R-type and I-arithmetic the operation
+  comes from the instruction's own fields — `{funct7[5], funct3}` — which is exactly
+  the encoding the ALU was designed to take. Every other signal is a fixed value per
+  opcode; `alu_op` is the one that varies within a case.
+
+- **Only `funct7[5]` is taken as an input, not all seven bits.** It is the only bit
+  that carries information in RV32I (ADD/SUB, SRL/SRA); the rest are always zero.
+  Taking one bit matches the ALU's `alu_opcode` encoding and makes the dependency
+  explicit.
+
+- **Branches use a fixed SUB, with funct3 passed downstream.** All branches perform
+  the same ALU operation (`rs1 - rs2`); funct3 selects the *condition applied to the
+  result* (zero for `beq`, non-zero for `bne`), which is evaluated in EX, not in the
+  ALU. So unlike arithmetic instructions, funct3 here does not select the ALU
+  operation — it selects a post-ALU test, which is why funct3 is an output of ID.
+
+- **`branch` and `jump` are separate signals.** Both ultimately redirect the PC, but
+  EX decides them differently: a jump is unconditional, a branch is conditional on
+  the comparison. A single signal could not tell EX whether to check a condition.
+
+- **`write_back_src` is 2 bits, not 1.** Three distinct sources can be written to a
+  register: the ALU result (arithmetic), the memory value (loads), and `PC+4` (`jal`'s
+  return address). `jal`'s return address is computed by the fetch-side adder, not the
+  ALU — during a jump the ALU result is the *target*, not the return address — so it
+  is genuinely a third source.
+
+- **Safe defaults for unrecognized opcodes.** The `default` case clears `reg_write`,
+  `write_mem`, `branch`, and `jump`, so a garbage instruction cannot corrupt register
+  or memory state.
+
+- **Deliberately incomplete.** Covers the minimum ISA (R-type, I-arithmetic, LW, SW,
+  LUI, BEQ, JAL). `auipc`, `jalr`, and the remaining instruction variants are winter
+  work; the module grows alongside the instructions the datapath can actually execute.
+
+## Immediate Generator
+
+- **Switches on format, not opcode** — the mirror image of the control unit. `0x03`
+  and `0x13` share one case here because their immediate layouts are identical, even
+  though they are separate cases in the control unit.
+
+- **Five different reassembly patterns.** I-type is contiguous (bits 31:20). S-type is
+  split in two (31:25 and 11:7) because stores need two source registers occupying the
+  middle of the instruction. B-type and J-type are split *and* reordered. U-type is a
+  20-bit field that is *positioned* in the upper bits rather than sign-extended.
+
+- **Why the scrambling exists.** RISC-V arranges immediates so the same immediate bit
+  tends to come from the same instruction bit across formats. Each bit that changes
+  position between formats costs a mux; keeping them consistent means most immediate
+  bits are plain wires. The encoding is deliberately harder for humans to read in
+  exchange for a smaller, faster decoder — the right trade, since humans read the spec
+  once and hardware decodes billions of instructions.
+
+- **The sign bit is always at instruction bit 31, in every format.** Sign extension is
+  therefore identical regardless of format — replicate bit 31 — with no
+  format-dependent logic. Implemented with the replication operator
+  (`{{20{instruction[31]}}, ...}`) rather than relying on signed/unsigned assignment
+  rules, which are context-dependent and easy to get subtly wrong.
+
+- **B-type and J-type append an implicit `1'b0`.** Branch and jump targets are always
+  even (instructions are 4 bytes apart), so bit 0 of the offset is always zero and is
+  not stored. The encoded field holds bits 12:1 (B) or 20:1 (J), and the hardware
+  appends the zero — doubling the reachable range at no encoding cost.
+
+- **U-type is positioned, not sign-extended.** `lui` places its 20 bits in bits 31:12
+  with the low 12 zeroed, because its purpose is building the upper half of a large
+  constant (typically paired with `addi` for the lower 12).
+
+- **R-type has no case.** R-type has no immediate; it falls to the `default` and
+  produces zero, which is harmless since the control unit sets `reg_or_imm` to select
+  `rs2` for those instructions.
+
+## ID Stage (Instruction Decode)
+
+- **Field slicing lives inline; the control unit and immediate generator are separate
+  modules.** Slicing rd/rs1/rs2/funct3/opcode is pure wire tapping with nothing to get
+  wrong and nothing worth testing in isolation, so it stays in the wrapper — the same
+  reasoning that kept the +4 adder inside `if_stage`. The control unit and immediate
+  generator are substantial self-contained logic that each deserve their own
+  testbench, so they are separate modules.
+
+- **Every field is extracted unconditionally, even when unused.** An `addi` still
+  reads `rs2`; a `sw` still produces an `rd`. Wire taps and register reads are free
+  and non-destructive, and gating them would require logic to decide *whether* to
+  extract — more hardware than the extraction itself, and a sequential
+  decide-then-read dependency that lengthens the critical path. The datapath produces
+  every possibility in parallel; the control signals select which ones matter.
+
+- **The register file lives in ID, with WB's write ports exposed as inputs.** It is a
+  single shared resource: ID reads it, WB writes it. Placing it in ID keeps the
+  timing-critical read local (ID must have operand values ready for EX within the
+  cycle), and routes only the write signals backward rather than sending indices
+  forward and values back. Instantiating it in both stages would create two separate
+  register files — writes in one would be invisible to reads in the other.
+
+- **`wb_rd` is a separate input from the locally sliced `rd`.** In a pipeline they
+  belong to different instructions: ID's `rd` is the instruction being decoded, while
+  WB's `rd` is an older instruction whose result is now ready. Each instruction's `rd`
+  travels forward with it and arrives at the write port alongside its own result.
+
+- **funct3 is an output.** EX needs it to select the branch condition (`beq` vs `bne`),
+  since all branches share one ALU operation and differ only in the test applied to
+  the result.
+
+- **ID adds no latency.** Field slicing, control generation, immediate generation, and
+  register reads are all combinational, so everything ID produces is valid in the same
+  cycle the instruction arrives. The only latency in the fetch/decode path is the
+  instruction memory's one-cycle read.
