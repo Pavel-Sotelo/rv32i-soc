@@ -14,6 +14,7 @@ module tb_if_id();
         
         logic [31:0] instruction;
         logic [31:0] if_out_current_pc;
+        logic [31:0] if_out_current_pc_plus_4;
 
     //id_stage I/O
       
@@ -34,7 +35,8 @@ module tb_if_id();
         logic [1:0] write_back_src;    
         logic branch;                  
         logic jump;     
-        logic [31:0] id_out_current_pc;  
+        logic [31:0] id_out_current_pc;
+        logic [31:0] id_out_current_pc_plus_4;  
 
     //DUT if_stage
     if_stage #(
@@ -48,7 +50,8 @@ module tb_if_id();
         .pc_target(pc_target),
         
         .instruction(instruction),
-        .out_current_pc(if_out_current_pc)
+        .out_current_pc(if_out_current_pc),
+        .out_current_pc_plus_4(if_out_current_pc_plus_4)
     
     );
 
@@ -60,6 +63,7 @@ module tb_if_id();
         
         .instruction(instruction),
         .current_pc(if_out_current_pc),
+        .current_pc_plus_4(if_out_current_pc_plus_4),
         .wb_write_enable(wb_write_enable),
         .wb_write_value(wb_write_value),
         .wb_rd(wb_rd),
@@ -77,7 +81,8 @@ module tb_if_id();
         .write_back_src(write_back_src),    
         .branch(branch),                  
         .jump(jump),
-        .out_current_pc(id_out_current_pc)    
+        .out_current_pc(id_out_current_pc),
+        .out_current_pc_plus_4(id_out_current_pc_plus_4)    
     
     );
     //Task's
@@ -191,7 +196,7 @@ module tb_if_id();
     
                 1. Fetch and decode a program containing one instruction of each format(R, I, S, B, U, J).
                    For each, we'll verify the instruction reaches ID intact, and that ID produces the correct fields
-                   (rd, funct3, immediate) and all 8 control signals. This is an integration test, each module is
+                   (rd, funct3, immediate, pc, pc_plus_4) and all 8 control signals. This is an integration test, each module is
                    already tested, here we verify they are wired together correctly.
 
         */
@@ -222,7 +227,8 @@ module tb_if_id();
                 //now we check INSTRUCTION DECODE stage outputs
                 //imem[0] is add x3, x1, x2 (R-type)
                 check("imem[0] got rd = x3", rd, 5'd3);
-                check("got out_current_pc = 0 when pc was 0", id_out_current_pc, 5'd0);
+                check("got out_current_pc = 0 when pc was 0", id_out_current_pc, 32'd0);
+                check("got out_current_pc_plus_4 = 4 when pc was 0 (0 + 4 = 4)", id_out_current_pc_plus_4, 32'd4);
                 check("got out_funct3 = 0000 in add instruction", out_funct3, 5'b0000);
                 
                 //control signal output's for imem[0]

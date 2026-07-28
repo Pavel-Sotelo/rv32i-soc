@@ -11,6 +11,7 @@ module tb_if_stage();
     
     logic [31:0] instruction;
     logic [31:0] out_current_pc;
+    logic [31:0] out_current_pc_plus_4;
     
     if_stage #(
         .PROGRAM("program_add_5_3.hex")
@@ -22,7 +23,8 @@ module tb_if_stage();
         .pc_target(pc_target),
         
         .instruction(instruction),
-        .out_current_pc(out_current_pc)
+        .out_current_pc(out_current_pc),
+        .out_current_pc_plus_4(out_current_pc_plus_4)
     
     );
 
@@ -56,7 +58,8 @@ module tb_if_stage();
                 2. We reset the PC back to pc = 0, so, it must output imem[0] in the next cycle, but we will raise
                    use_target HIGH, as well as a new address (pc = 8) , to see if in the next cycle, it ouputs imem[2] and not imem[0]
                    
-                3. We quickly test out_current_pc: it musts output the current pc value (not address) one cycle later      
+                3. We quickly test out_current_pc: it musts output the current pc value (not address) one cycle later, as well we check
+                   the out_current_pc_plus_4 output      
            
         */  
          
@@ -66,9 +69,12 @@ module tb_if_stage();
         @(posedge clk); 
         #1;
        
+        reset = 0;
+       
         $display("");
+        
         //TC1
-                    
+                      
             //Extra reset cycle holds PC at 0 so memory's one cycle late read outputs imem[0] before PC advances     
             //In this moment, we send address 0, from this moment, the address will automatically advance to 0,4,8 each cycle.
             //In this cycle, address is 0, after this cycle, the instruction should be imem[0]
@@ -76,8 +82,6 @@ module tb_if_stage();
             @(posedge clk); 
             #1;     
     
-            reset = 0;
-            
             check("TC1a - address 0 got imem[0] one cycle after - Success", instruction, 32'h00500093);
             
             //now in this cycle, address is 4, after this cycle, the instruction should be imem[1]
@@ -131,7 +135,8 @@ module tb_if_stage();
             
             //we also check if out_current_pc got 0x8 as well (out_current_pc captures the current_pc address one cycle later)
             
-            check("TC3 - out_current_pc outputs target address (0x8) one cycle later - Success", out_current_pc, 32'h8);
+            check("TC3a - out_current_pc outputs target address (0x8) one cycle later - Success", out_current_pc, 32'h8);
+            check("TC3b - out_current_pc_plus_4 outputs target address (0xC) one cycle later - Success", out_current_pc_plus_4, 32'hC);
             
             #9;            
             

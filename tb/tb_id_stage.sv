@@ -9,7 +9,8 @@ module tb_id_stage();
     logic reset;
         
     logic [31:0] instruction;
-    logic [31:0] current_pc;    
+    logic [31:0] current_pc;
+    logic [31:0] current_pc_plus_4;    
     logic wb_write_enable;
     logic [31:0] wb_write_value;
     logic [4:0] wb_rd;
@@ -29,7 +30,7 @@ module tb_id_stage();
     logic branch;                  
     logic jump;     
     logic [31:0] out_current_pc;  
- 
+    logic [31:0] out_current_pc_plus_4;
         
     //DUT instantiation
     id_stage DUT(
@@ -39,6 +40,7 @@ module tb_id_stage();
         
         .instruction(instruction),
         .current_pc(current_pc),
+        .current_pc_plus_4(current_pc_plus_4),
         .wb_write_enable(wb_write_enable),
         .wb_write_value(wb_write_value),
         .wb_rd(wb_rd),
@@ -56,7 +58,8 @@ module tb_id_stage();
         .write_back_src(write_back_src),    
         .branch(branch),                  
         .jump(jump),
-        .out_current_pc(out_current_pc)    
+        .out_current_pc(out_current_pc),
+        .out_current_pc_plus_4(out_current_pc_plus_4)   
     
     );    
 
@@ -175,13 +178,13 @@ module tb_id_stage();
                (reg_value_1=5, reg_value_2=3, rd=3, alu_op=0000, reg_or_imm=1, reg_write=1, read_mem=0, write_mem=0, write_back_src=00, branch=0, jump=0)
 
             2. Now we will sent an I-type arithmetic instruction (addi x5,x1,-8) to check immediate output, as well we will
-               send a PC address to check the PC output, and we'll check out_funct3 (to finally test all remaining outputs that didn't got
+               send a PC address to check the PC output and PC_plus_4 output, and we'll check out_funct3 (to finally test all remaining outputs that didn't got
                check in TC1)
 
     */
 
         //initialize DUT inputs, as well as raising reset to avoid X's in register_file
-        reset = 1;  instruction = 32'd0;  current_pc = 32'd0;  wb_write_enable = 0;  wb_write_value = 32'd0;  wb_rd = 5'd0;
+        reset = 1;  instruction = 32'd0;  current_pc = 32'd0;  current_pc_plus_4 = 32'd0;  wb_write_enable = 0;  wb_write_value = 32'd0;  wb_rd = 5'd0;
     
         repeat(2) @(posedge clk);
         #1;
@@ -228,16 +231,20 @@ module tb_id_stage();
             instruction = 32'hFF808293;     
                 
             //as well we send a PC address
-            current_pc = 32'd12; #1;
+            current_pc = 32'd12; 
+            current_pc_plus_4 = 32'd16; 
+            #1;
             
             //check 32-bit sign-extended immediate
             check("TC2 got 32-bit sign-extended immediate = -8 decimal", immediate, 32'hFFFFFFF8);
             //check rd = x5
             check("TC2 got rd = x5", rd, 5'd5);
             //check out_current_pc
-            check("TC2 got out_current_pc = 12 when pc is 12", out_current_pc, 5'd12);
+            check("TC2 got out_current_pc = 12 when pc is 12", out_current_pc, 32'd12);
+            //check out_current_pc_plus_4
+            check("TC2 got out_current_pc_plus_4 = 16 when pc is 12 (12 + 4 = 16)", out_current_pc_plus_4, 32'd16);
             //check out_funct3
-            check("TC2 got out_funct3 = 0000 in addi instruction", out_funct3, 5'b0000);
+            check("TC2 got out_funct3 = 0000 in addi instruction", out_funct3, 4'b0000);
             
             //check all control signals
             check_control("TC2 I-type instruction (addi x5,x1,-8) returned all control signals right",  1, 0, 4'b0000, 0, 0, 2'b00, 0 , 0);

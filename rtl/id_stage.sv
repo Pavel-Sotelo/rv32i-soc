@@ -9,6 +9,7 @@ module id_stage(
         
         input logic [31:0] instruction,
         input logic [31:0] current_pc,
+        input logic [31:0] current_pc_plus_4,
         
         //instantiation of register_file in ID to get the 2 reads locally and get only the write of WB
         //(instead of instantiating regiter_file on WB and having to send 2 reads externally)
@@ -38,11 +39,13 @@ module id_stage(
         output logic branch,                  
         output logic jump,
         
-        output logic [31:0] out_current_pc    
+        output logic [31:0] out_current_pc,
+        output logic [31:0] out_current_pc_plus_4  
     
     );
 
     assign out_current_pc = current_pc;
+    assign out_current_pc_plus_4 = current_pc_plus_4;
     assign out_funct3 = instruction[14:12];
     assign rd = instruction[11:7];
     

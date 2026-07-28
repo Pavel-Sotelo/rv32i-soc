@@ -10,22 +10,32 @@ module if_stage#(
     input logic [31:0] pc_target,
     
     output logic [31:0] instruction,
-    output logic [31:0] out_current_pc
+    output logic [31:0] out_current_pc,
+    output logic [31:0] out_current_pc_plus_4
 
     );
     
     logic [31:0] current_pc;
     logic [31:0] next_pc;
+    logic [31:0] current_pc_plus_4;
     
-    
-    assign next_pc = use_target? pc_target : (current_pc + 32'd4);
+    assign current_pc_plus_4 = current_pc + 32'd4; 
+    assign next_pc = use_target? pc_target : current_pc_plus_4;
     
     always_ff @(posedge clk) begin
  
-        if(reset)
-            out_current_pc <= 32'd0;    
-        else
-            out_current_pc <= current_pc; 
+        if(reset) begin
+
+            out_current_pc <= 32'd0;
+            out_current_pc_plus_4 <= 32'd4;
+
+        end else begin
+
+            out_current_pc <= current_pc;
+            out_current_pc_plus_4 <= current_pc_plus_4;
+
+        end
+
      end
 
     pc program_counter (
