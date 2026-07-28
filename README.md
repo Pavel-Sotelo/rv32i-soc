@@ -16,10 +16,14 @@ register and memory state.
 - [x] ISS skeleton (C reference model) — CPUState, fetch/decode/execute, R-type + I-type arithmetic
 - [x] IF stage — PC register, fetch logic, branch/jump target mux
 - [x] ID stage — control unit, immediate generator (all 6 formats), register file read
+- [x] ISS — loads (LW), stores (SW), LUI, store-load round-trip
+- [x] Data memory (BRAM, synchronous read, byte→word addressing)
+- [x] EX + WB stage modules (ALU path, memory path, write-back mux)
+- [ ] First working CPU — top module, straight-line program running
+- [ ] ISS — branches (BEQ), jumps (JAL)
 - [ ] ISS complete — loads, stores, branches, jumps
-- [ ] EX + WB stages (single program running)
 - [ ] Co-simulation (RTL vs ISS)
-- [ ] Pipelining + forwarding
+- [ ] Forwarding (data hazard resolution)
 - [ ] Timing closure / Fmax
 - [ ] AXI4-Lite integration (CPU ↔ UART)
 
