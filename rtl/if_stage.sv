@@ -9,7 +9,7 @@ module if_stage#(
     input logic use_target,
     input logic [31:0] pc_target,
     
-    output logic [31:0] instruction,
+    output logic [31:0] out_instruction,
     output logic [31:0] out_current_pc,
     output logic [31:0] out_current_pc_plus_4
 
@@ -54,7 +54,7 @@ module if_stage#(
     
         .clk(clk),
         .addr(current_pc),
-        .instruction(instruction)
+        .instruction(out_instruction)
     
     );    
      

@@ -34,8 +34,8 @@ module ex_stage(
         output logic  [4:0] out_rd,  
         output logic  [1:0] out_write_back_src,
         
-        output logic [31:0] alu_result,
-        output logic [31:0] d_mem_read_data,
+        output logic [31:0] out_alu_result,
+        output logic [31:0] out_d_mem_read_data,
         //EX is where current_pc gets worked (PC + immediate for branch and jump targets) so it doesn't need to get outputted again
         output logic [31:0] out_current_pc_plus_4           
 
@@ -57,17 +57,17 @@ module ex_stage(
         .b(alu_second_operand),
         
         .operation(alu_op),
-        .result(alu_result)
+        .result(out_alu_result)
     
     );
     
     data_memory data_memory_inst (
     
         .clk(clk),
-        .addr(alu_result),
+        .addr(out_alu_result),
         .write_enable(write_mem),
         .write_data(reg_value_2),
-        .read_data(d_mem_read_data)
+        .read_data(out_d_mem_read_data)
     
     );
 

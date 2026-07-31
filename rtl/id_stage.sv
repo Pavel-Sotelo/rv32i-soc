@@ -20,24 +20,24 @@ module id_stage(
         
     //Outputs
     
-        output logic [31:0] reg_value_1,
-        output logic [31:0] reg_value_2,
+        output logic [31:0] out_reg_value_1,
+        output logic [31:0] out_reg_value_2,
         
-        output logic [31:0] immediate,
+        output logic [31:0] out_immediate,
         
-        output logic [4:0] rd,
+        output logic [4:0] out_rd,
        
         //Output to evaluate result of a branch instruction
         output logic [2:0] out_funct3,
     
-        output logic reg_write,              
-        output logic reg_or_imm,              
-        output logic [3:0] alu_op,            
-        output logic read_mem,                
-        output logic write_mem,               
-        output logic [1:0] write_back_src,    
-        output logic branch,                  
-        output logic jump,
+        output logic out_reg_write,              
+        output logic out_reg_or_imm,              
+        output logic [3:0] out_alu_op,            
+        output logic out_read_mem,                
+        output logic out_write_mem,               
+        output logic [1:0] out_write_back_src,    
+        output logic out_branch,                  
+        output logic out_jump,
         
         output logic [31:0] out_current_pc,
         output logic [31:0] out_current_pc_plus_4  
@@ -47,7 +47,7 @@ module id_stage(
     assign out_current_pc = current_pc;
     assign out_current_pc_plus_4 = current_pc_plus_4;
     assign out_funct3 = instruction[14:12];
-    assign rd = instruction[11:7];
+    assign out_rd = instruction[11:7];
     
   
     register_file reg_file (
@@ -59,8 +59,8 @@ module id_stage(
         .write_enable(wb_write_enable),
         .write_value(wb_write_value),
         .rd(wb_rd),
-        .out_rs1(reg_value_1),
-        .out_rs2(reg_value_2)
+        .out_rs1(out_reg_value_1),
+        .out_rs2(out_reg_value_2)
 
     );
     
@@ -70,14 +70,14 @@ module id_stage(
         .funct3(instruction[14:12]),
         .funct7(instruction[30]),
         
-        .reg_write(reg_write),
-        .reg_or_imm(reg_or_imm),
-        .alu_op(alu_op),
-        .read_mem(read_mem),
-        .write_mem(write_mem),
-        .write_back_src(write_back_src),
-        .branch(branch),
-        .jump(jump)
+        .reg_write(out_reg_write),
+        .reg_or_imm(out_reg_or_imm),
+        .alu_op(out_alu_op),
+        .read_mem(out_read_mem),
+        .write_mem(out_write_mem),
+        .write_back_src(out_write_back_src),
+        .branch(out_branch),
+        .jump(out_jump)
         
     );
     
@@ -85,7 +85,7 @@ module id_stage(
     immediate_generator imm_gen (
     
         .instruction(instruction),
-        .imm(immediate)        
+        .imm(out_immediate)        
         
     );        
 
