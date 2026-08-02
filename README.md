@@ -1,4 +1,4 @@
-<img width="1398" height="1085" alt="image" src="https://github.com/user-attachments/assets/3d7bfcf3-10f0-4f2e-b462-deb5a24a77e3" /># rv32i-soc
+# rv32i-soc
 
 A RISC-V RV32I system-on-chip built from scratch on a Basys 3 FPGA (Xilinx Artix-7).
 
