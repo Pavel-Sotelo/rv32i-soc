@@ -1,4 +1,4 @@
-# rv32i-soc
+<img width="1398" height="1085" alt="image" src="https://github.com/user-attachments/assets/3d7bfcf3-10f0-4f2e-b462-deb5a24a77e3" /># rv32i-soc
 
 A RISC-V RV32I system-on-chip built from scratch on a Basys 3 FPGA (Xilinx Artix-7).
 
@@ -20,6 +20,7 @@ register and memory state.
 - [x] Data memory (BRAM, synchronous read, byte→word addressing)
 - [x] EX + WB stage modules (ALU path, memory path, write-back mux)
 - [x] First working CPU — top module, straight-line program executing
+- [x] Python assembler — all six RV32I formats, .s source → .hex output
 - [ ] Branch and jump resolution (EX → IF redirect, 2-cycle flush)
 - [ ] ISS — branches (BEQ), jumps (JAL)
 - [ ] ISS complete — loads, stores, branches, jumps
