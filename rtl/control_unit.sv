@@ -90,7 +90,7 @@ module control_unit(
             //OPCODE 99 DECIMAL (B-TYPE, Branch)             
             7'h63: begin
                         reg_write = 0;       
-                        reg_or_imm = 0;
+                        reg_or_imm = 1;
                         alu_op = 4'b1000; //equal is derived by rs1 - rs2 == 0
                         read_mem = 0;
                         write_mem = 0;
@@ -103,7 +103,7 @@ module control_unit(
             7'h6F: begin
                         reg_write = 1;       
                         reg_or_imm = 0;
-                        alu_op = 4'b0000; //ADD: PC + Offset (imm)
+                        alu_op = 4'b0000; //don't care, ALU is idle during jump (PC + imm is driven by branch/jump adder in ex_stage)
                         read_mem = 0;
                         write_mem = 0;
                         write_back_src = 2'b11;
