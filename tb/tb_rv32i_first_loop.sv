@@ -26,7 +26,10 @@ module tb_rv32i_first_loop();
     initial clk = 0; 
     always #(CLK_PERIOD/2.0) clk = ~clk;
 
+    //Signal to drive txt file generation
+    integer f;
     
+    //Signal to count number of errors in simulation
     int errors = 0;
 
     //check_reg task: Checks if expected values in specified register are the same as real register.
@@ -103,13 +106,20 @@ module tb_rv32i_first_loop();
             check_reg(3,  32'd4);      //limit, never modified
             check_reg(0,  32'd0);      //x0 stays zero always (the fillers write to it)
        
-       $display("");
-       //Check for errors written in check_reg tasks     
+        $display("");
+        //Check for errors written in check_reg tasks     
             
             if (errors == 0) 
                 $display("PASS: all registers correct");
             else             
                 $display("FAIL: %0d mismatches", errors);
+
+
+        //Create txt file with final 32 registers state for co-simulation
+        f = $fopen("C:/Users/Pavel/Desktop/rv32i-soc/cosim/rtl_regs_first_loop.txt", "w");
+        for (int i = 0; i < 32; i++)
+            $fdisplay(f, "x%0d = %08x", i, DUT.id_inst.reg_file.register[i]);
+        $fclose(f);
 
 
         $display("");
