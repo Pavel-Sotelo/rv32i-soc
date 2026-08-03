@@ -34,22 +34,39 @@ module ex_stage(
         output logic  [4:0] out_rd,  
         output logic  [1:0] out_write_back_src,
         
+        output logic out_use_target,
+        output logic [31:0] out_pc_target,
+        
         output logic [31:0] out_alu_result,
         output logic [31:0] out_d_mem_read_data,
         //EX is where current_pc gets worked (PC + immediate for branch and jump targets) so it doesn't need to get outputted again
         output logic [31:0] out_current_pc_plus_4           
 
     );
-
+    
+    //Drive general outputs to wb
     assign out_reg_write = reg_write;
     assign out_rd = rd;
     assign out_write_back_src = write_back_src;
     assign out_current_pc_plus_4 = current_pc_plus_4;
-
+    
+    
     //ALU second operand logic
     logic [31:0] alu_second_operand;
-    assign alu_second_operand = reg_or_imm? reg_value_2 : immediate; 
+    assign alu_second_operand = reg_or_imm? reg_value_2 : immediate;
+    
+    
+    //Branch/jump logic
+    logic take_branch;
+    
+    //Branch/jump flag (driven by branch_unit(take_branch) or jump)
+    assign out_use_target = take_branch | jump;
+    
+    //branch/jump adder (ALU already performs SUB on branch, so we need another adder for PC + imm)
+    assign out_pc_target  = current_pc + immediate;
 
+
+    //Instantiations:
 
     alu alu_inst (
     
@@ -59,6 +76,17 @@ module ex_stage(
         .operation(alu_op),
         .result(out_alu_result)
     
+    );
+    
+    //Currently branch_unit only drives beq and bne
+    branch_unit branch_unit_inst (
+    
+        .alu_result(out_alu_result),
+        .branch(branch),
+        .funct3(funct3),
+        
+        .take_branch(take_branch)
+        
     );
     
     data_memory data_memory_inst (
