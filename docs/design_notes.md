@@ -528,10 +528,12 @@ not speed.
 
 - **Pipeline registers live in the top module; stage modules stay combinational.**
   A pipeline register is a flop on *every* signal crossing a stage boundary, and a
-  boundary exists between modules, not inside one. Keeping all of them in
-  `rv32i_top` puts both boundaries (IF/ID→EX and EX→WB) in a single file where the
+  boundary exists between modules, not inside one. Keeping the two hand-written ones
+  in `rv32i_top` puts both boundaries (ID→EX and EX→WB) in a single file where the
   partition is visible at a glance, and leaves each stage independently testable
-  with a simple combinational testbench.
+  with a simple combinational testbench. Production cores go both ways — CV32E40P
+  registers stage outputs inside each stage module — so this is a readability
+  choice, not a correctness one.
 
 - **Why every crossing signal needs a flop, not just the data.** By the time an
   instruction's result reaches WB, a different instruction occupies EX. A wire
@@ -544,17 +546,184 @@ not speed.
 - **`d_mem_read_data` is the one crossing signal not flopped by hand.** The BRAM's
   built-in output register already provides that flop. The boundary needed by the
   timing budget and the boundary imposed by the memory technology coincide at the
-  same place — which is what makes the 3-stage partition clean rather than
-  accidental.
+  same place, which is why there is no MEM stage and why the EX→WB crossing costs
+  no extra hardware.
 
-- **Latency-alignment flops are a separate thing from pipeline registers.** The
-  registers on `out_current_pc` and `out_current_pc_plus_4` sit *inside* `if_stage`,
-  not at a boundary. Their job is to delay a fast path so it arrives with a slow one
-  (the BRAM's one-cycle instruction read), keeping IF's outputs self-consistent.
-  Two different reasons to flop a signal: crossing a boundary, and matching a
-  latency.
+- **The flops inside `if_stage` are the IF→ID pipeline register.** `out_current_pc`
+  and `out_current_pc_plus_4` are registered so they arrive aligned with
+  `instruction`, which the BRAM delivers one cycle after the address. All three
+  cross the same boundary; the only difference is who wrote the flop. This was
+  first described as "latency alignment, not a pipeline register" — a distinction
+  that does not survive scrutiny, since a register separating two stages is a
+  pipeline register regardless of which module it sits in.
 
-- **IF and ID share one stage, so there is no register between them.** `if_stage`
-  and `id_stage` are separate files for testability, not separate pipeline stages;
-  they are wired combinationally. The 3-stage partition is IF/ID, EX, WB.
+- **Stage count: four, not three (30 Jul 2026).** The design was first described as
+  3-stage (IF/ID, EX, WB) by counting only the pipeline registers written by hand.
+  Counting register boundaries gives four stages: the instruction BRAM's output
+  register separates IF from ID exactly as the data memory's output register
+  separates EX from WB. Either both count or neither does. Consequence: branches
+  resolve in EX with two wrongly-fetched instructions behind them, so the penalty
+  is 2 cycles, not 1. The measured comparison against a merged ID/EX partition is
+  in the README.
 
+- **Flat named signals per boundary, not packed structs.** Each boundary could be one
+  `typedef struct packed`, making the flop a single line and adding a signal a
+  one-line edit. Flat signals were chosen for bring-up: `id_ex_rd` appears by name in
+  the waveform, while `id_ex_q.rd` sits inside a collapsed blob. The cost is 19
+  declarations and two verbose `always_ff` branches. Worth revisiting once the design
+  stops changing.
+
+- **Three live copies of most signals, so the prefix names the stage.** `id_rd` (the
+  combinational output of ID), `id_ex_rd` (the pipeline register), and `ex_rd` all
+  exist simultaneously and belong to three different instructions. Naming the
+  register after the *boundary* rather than the stage avoids the collision between
+  "the flopped value entering EX" and "the value EX produces".
+
+- **Every signal travels only as far as its last consumer.** `current_pc` is flopped
+  into EX and stops there — the branch target adder is its only client.
+  `current_pc_plus_4` continues to WB for JAL's return address. `instruction` crosses
+  only IF→ID and is consumed entirely by decode, so it never enters the pipeline
+  registers at all. The rule is "born where, last used where": a signal gets one flop
+  per boundary it actually crosses, and none for boundaries another register already
+  provides.
+
+- **All pipeline registers reset to zero, though only two need to.** Functionally only
+  `reg_write` and `write_mem` require reset — they cause side effects, while the rest
+  is data nobody acts on when the enables are low. Everything is reset anyway to keep
+  X's out of the waveform during bring-up. This is not free on an Artix-7: a global
+  reset net on datapath registers can block flop packing and hurt timing. If reset
+  fanout appears in a timing report, the datapath resets come out and the control
+  resets stay.
+
+- **`PROGRAM` is a parameter threaded from the testbench down to
+  `instruction_memory`.** Running a different program should not require editing RTL.
+  A default is kept so `rv32i_top` still elaborates standalone, which is what makes
+  schematic inspection and synthesis possible without a wrapper.
+
+---
+
+## Branch and Jump Resolution
+
+- **Branches resolve in EX, giving a 2-cycle penalty.** When the branch resolves,
+  wrongly-fetched instructions occupy both ID and IF. Resolving in ID instead would
+  cost 1 cycle rather than 2, since only IF would hold a wrong instruction — but it
+  lengthens the ID critical path and requires forwarding into ID as well as EX.
+  Deferred, and worth revisiting against measured timing.
+
+- **`branch_unit` is a separate module.** The branch conditions are self-contained
+  decode logic worth testing in isolation, the same reasoning that made
+  `control_unit` and `immediate_generator` separate rather than inline. Field slicing
+  stays inline because there is nothing to get wrong; six conditions with signed and
+  unsigned variants is not that.
+
+- **The target adder is separate from the ALU, and computes unconditionally.** The
+  ALU performs the comparison (SUB), so it cannot also compute `current_pc +
+  immediate` in the same cycle. More importantly, using `take_branch` to select the
+  ALU's operands would be a combinational loop: the mux would wait on the comparison,
+  and the comparison would wait on the mux. The decision and the target are produced
+  in parallel; `use_target` only decides whether `if_stage` acts on the target. Same
+  pattern as ID extracting every field unconditionally — produce every possibility,
+  let control select.
+
+- **`reg_or_imm` must be high for B-type.** Branches compare two registers, so the
+  ALU's second operand is `reg_value_2`, not the immediate. This was initially wrong
+  and is recorded in the bug log.
+
+- **Only BEQ and BNE are implemented; the other four need a design decision.** Both
+  come directly from the SUB result — zero for BEQ, non-zero for BNE — so they cost
+  nothing beyond the existing `alu_op`. `blt`/`bge`/`bltu`/`bgeu` cannot be derived
+  from the sign bit of `rs1 - rs2`, because the subtraction can overflow: for
+  `rs1 = -2147483648`, `rs2 = 1`, the stored result is positive and the sign bit
+  reports the wrong ordering. The correct signed test is sign XOR overflow, and the
+  unsigned test is the borrow-out — neither of which this ALU exposes. The options
+  are to make `alu_op` funct3-dependent (SLT/SLTU already exist and are correct), to
+  add a dedicated comparator, or to expose overflow and carry flags. Deferred until
+  a program needs them; the demo programs use counted loops, which need only `bne`.
+
+- **The redirect path carries no pipeline register.** `use_target` and `pc_target` run
+  from `ex_stage` to `if_stage` combinationally. A flop there would delay the redirect
+  by a cycle and grow the penalty from 2 to 3, and the wrongly-fetched instruction
+  count with it. Feedback against the pipeline direction is safe here because the PC
+  register closes the loop — the same reason the write-back path into `id_stage` is
+  not a combinational loop.
+
+- **The flush kills four signals for two consecutive cycles.** `reg_write` and
+  `write_mem` are the two that change architectural state; `branch` and `jump` are
+  killed alongside them so a squashed instruction cannot itself assert `use_target`
+  and redirect the PC to a wrong address. Everything else — the ALU result, the
+  immediate, `rd` — flows through as harmless garbage, because nothing acts on it
+  once the enables are low.
+
+- **Two cycles, because the wrong instructions arrive at the boundary one cycle
+  apart.** When the branch resolves in EX, the instruction behind it is in ID and the
+  next one is in IF. The first reaches the ID→EX register on the following edge, the
+  second one edge later. A single-cycle gate would catch only the first, so a flag
+  registers `use_target` and extends the squash by one cycle.
+
+- **Killing happens at the ID→EX boundary, not later.** `write_mem` is consumed in EX,
+  so by WB the memory write has already happened — squashing in WB would be too late
+  for stores. Killing at the earliest boundary also handles both enables in one place
+  rather than spreading the logic across two registers.
+
+- **Nothing needs to be killed in IF.** `if_stage` redirects the PC in the same cycle,
+  so whatever was being fetched is simply replaced. Only the two instructions already
+  past IF need squashing.
+
+- **JAL leaves the ALU idle.** The target comes from the dedicated adder, and the
+  value written to `rd` is `current_pc_plus_4` selected by `write_back_src = 2'b11`.
+  Whatever the ALU computes is discarded by the write-back mux. `alu_op` for the jump
+  opcode should still be a defined value rather than a don't-care, so X's do not
+  propagate into the waveform.
+
+---
+
+## Bring-Up and Integration
+
+- **Straight-line before branches.** The first top-module bring-up ran only
+  instructions needing no PC redirection, with `use_target` tied low. Branch logic was
+  added afterward as a separate step. Integrating the pipeline and the branch path at
+  once means a failure has two possible causes — wiring or branch logic — with no way
+  to tell which. Bringing up the straight-line datapath first established a known-good
+  pipeline, so any later failure was localized. Same principle as the UART's five-stage
+  bring-up: each step isolates one failure domain. It worked: the `reg_or_imm` bug
+  surfaced the moment the first branch executed, and the pipeline was already trusted.
+
+- **Branch control signals were flopped into EX before they were used.** `funct3`,
+  `branch`, `jump` and `current_pc` crossed ID→EX during straight-line bring-up even
+  though nothing read them yet. Synthesis removes flops that feed nothing, so the
+  interim cost was zero, and adding the branch path required no top-module signal
+  changes.
+
+- **Test programs leave three instructions between a write and its use.** There is no
+  forwarding yet, so a result only becomes readable once it reaches the register file
+  three cycles later. Anything closer reads a stale value — not a bug, just what a
+  pipeline without forwarding does. The fillers inside the loop program exist for this
+  reason and are documented in the `.s` source so they are not mistaken for padding.
+
+- **The CPU has no output ports, which breaks synthesis but not simulation.** With only
+  `clk` and `reset`, `opt_design` finds nothing observable and deletes the entire design
+  ("the design is empty"). Simulation is unaffected, since the simulator keeps every
+  internal signal and the testbench reaches the register file hierarchically. A debug
+  output is required before any timing report means anything; the real answer is the
+  UART, once AXI4-Lite lands.
+
+- **Stage testbenches cover only what the stage itself contains.** `tb_ex_stage` does
+  not re-test the ALU or the data memory — both have their own testbenches. It covers
+  the operand mux, the wiring into the submodules, the target adder, the `use_target`
+  gating, and the pass-throughs. A submodule testbench drives its ports directly and
+  therefore cannot catch a miswiring at the parent level, which is exactly the class of
+  bug the implicit-net failure turned out to be.
+
+- **ISA coverage is partial through v1.0, by decision.** The demo programs (Fibonacci,
+  factorial, a directed co-simulation test) are counted loops using word-aligned memory
+  access, so they need arithmetic and logic R/I-types, `lw`, `sw`, `lui`, `beq` and
+  `bne`. Byte and halfword accesses would require lane enables in `data_memory`; the
+  remaining branches require the comparison decision above. Neither is on the path to
+  the project's goals, which are bus integration, co-simulation, measured timing, and
+  verification discipline. Completeness belongs with the compliance suite, later.
+
+- **Memory is word-only and naturally aligned.** `data_memory` indexes with `addr[9:2]`,
+  so the low two bits are ignored — a misaligned address silently accesses the
+  containing word rather than trapping. The RISC-V spec permits either behaviour.
+  Acceptable while only LW and SW exist; byte and halfword accesses would force the
+  question.

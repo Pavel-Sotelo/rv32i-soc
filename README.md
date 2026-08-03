@@ -7,7 +7,7 @@ interface, verified by running the same programs on both the RTL and a C
 instruction set simulator (ISS) written from scratch, and comparing the final
 register and memory state.
 
-**Status: in progress** — CPU core executes straight-line programs; branches and jumps next.
+**Status: in progress** — CPU core executes loops with branches; co-simulation against the ISS next.
 
 ## Progress
 - [x] ALU — RV32I integer ops (ADD, SUB, AND, OR, XOR, SLL, SRL, SRA, SLT, SLTU), 9-case testbench
@@ -21,11 +21,14 @@ register and memory state.
 - [x] EX + WB stage modules (ALU path, memory path, write-back mux)
 - [x] First working CPU — top module, straight-line program executing
 - [x] Python assembler — all six RV32I formats, .s source → .hex output
-- [ ] Branch and jump resolution (EX → IF redirect, 2-cycle flush)
+- [x] Branch and jump resolution (EX → IF redirect, 2-cycle flush)
+- [x] Python assembler — all six RV32I formats, `.s` source → `.hex` output
+- [x] Branch resolution (BEQ, BNE) — EX → IF redirect, 2-cycle flush, counted loop running
 - [ ] ISS — branches (BEQ), jumps (JAL)
-- [ ] ISS complete — loads, stores, branches, jumps
 - [ ] Co-simulation (RTL vs ISS)
 - [ ] Forwarding (data hazard resolution)
+- [ ] Remaining branches (BLT, BGE, BLTU, BGEU) — needs signed/unsigned comparison
+- [ ] JAL / JALR
 - [ ] Timing closure / Fmax
 - [ ] AXI4-Lite integration (CPU ↔ UART)
 
@@ -122,7 +125,8 @@ work later in the project targets.
 - `rtl/` — SystemVerilog source
 - `tb/` — testbenches
 - `iss/` — C instruction-set simulator (golden reference model)
-- `programs/` — hex programs loaded into instruction memory
+- `tools/` — Python assembler
+- `programs/` — assembly source and generated hex, one folder per program
 - `docs/` — design notes and bug logs
 
 ## Target

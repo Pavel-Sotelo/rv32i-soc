@@ -24,3 +24,29 @@ force the top bit to zero (`{1'b0, funct3}`).
 **How it was caught:** Integration test in `tb_id_stage` decoding `addi x5, x1, -8`. The
 `control_unit` unit test had passed because its I-type test vector used `funct3 = 101`
 (srai) — the one funct3 value where bit 30 is genuinely meaningful.
+
+---
+
+## 2026-08-02 — `reg_or_imm` low for B-type, so branches never resolved
+
+**Module:** `control_unit.sv`
+
+**Cause:** The first program with a loop never terminated. The counter incremented
+past its limit indefinitely — `bne` was taken on every iteration, including the one
+where its two operands were equal.
+
+**Root cause:** The B-type case set `reg_or_imm = 0`. In `ex_stage` the operand mux is
+`reg_or_imm ? reg_value_2 : immediate`, so the ALU received the branch offset instead
+of `rs2`. A `bne x2, x3, -16` therefore computed `x2 + 16` rather than `x2 - x3`. That
+result is never zero, so `take_branch` was asserted unconditionally.
+
+Branches compare two registers, so B-type belongs with R-type on this signal, not with
+the I- and S-types that use an immediate.
+
+**Fix:** `reg_or_imm = 1` for opcode `0x63`.
+
+**How it was caught:** The first loop program. Neither existing test could have found
+it: the straight-line program contains no branches, and `tb_ex_stage` drives
+`reg_or_imm` by hand rather than taking it from `control_unit`, so it verified the mux
+against its own assumption instead of against the decoder. The bug lived precisely in
+the gap between two modules that were each individually correct.
