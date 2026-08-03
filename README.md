@@ -24,8 +24,8 @@ register and memory state.
 - [x] Branch and jump resolution (EX → IF redirect, 2-cycle flush)
 - [x] Python assembler — all six RV32I formats, `.s` source → `.hex` output
 - [x] Branch resolution (BEQ, BNE) — EX → IF redirect, 2-cycle flush, counted loop running
-- [ ] ISS — branches (BEQ), jumps (JAL)
-- [ ] Co-simulation (RTL vs ISS)
+- [x] ISS — branches (BEQ), jumps (JAL)
+- [x] Co-simulation (RTL vs ISS) — final register state, loop program passes
 - [ ] Forwarding (data hazard resolution)
 - [ ] Remaining branches (BLT, BGE, BLTU, BGEU) — needs signed/unsigned comparison
 - [ ] JAL / JALR
