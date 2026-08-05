@@ -24,6 +24,8 @@ module rv32i_top #(
     //id_stage     
 
         //outputs
+            logic [4:0] id_rs1;       
+            logic [4:0] id_rs2;          
             logic [31:0] id_reg_value_1;       
             logic [31:0] id_reg_value_2;           
             logic [31:0] id_immediate;       
@@ -41,6 +43,8 @@ module rv32i_top #(
             logic [31:0] id_current_pc_plus_4;      
     
          //pipeline register outputs
+            logic [4:0] id_ex_rs1;       
+            logic [4:0] id_ex_rs2;           
             logic [31:0] id_ex_reg_value_1;       
             logic [31:0] id_ex_reg_value_2;           
             logic [31:0] id_ex_immediate;       
@@ -91,6 +95,11 @@ module rv32i_top #(
 
     //Signal to do the 2nd cycle-flush of a branch/jump instruction
     logic second_flush;
+    
+    //Signals for forwarding unit (1-back data hazard fix)
+    logic forward_rs1;
+    logic forward_rs2;
+
 
     //Pipeline output register boundary's
     always_ff @(posedge clk) begin
@@ -98,11 +107,14 @@ module rv32i_top #(
         //reset to avoid X's in simulation
         if (reset) begin
         
+            id_ex_rs1 <= 5'b0;
+            id_ex_rs2 <= 5'b0;        
             id_ex_reg_value_1 <= 32'b0;
             id_ex_reg_value_2 <= 32'b0;
             id_ex_immediate <= 32'b0;
             id_ex_rd <= 5'b0;
             id_ex_funct3 <= 3'b0;
+            second_flush <= 1'b0;
             id_ex_reg_write <= 1'b0;
             id_ex_write_mem <= 1'b0;
             id_ex_reg_or_imm <= 1'b0;
@@ -123,7 +135,9 @@ module rv32i_top #(
         end else begin
         
                 
-            //Boundary 1: ID->EX     
+            //Boundary 1: ID->EX 
+            id_ex_rs1 <= id_rs1;
+            id_ex_rs2 <= id_rs2;            
             id_ex_reg_value_1 <= id_reg_value_1;
             id_ex_reg_value_2 <= id_reg_value_2;
             id_ex_immediate <= id_immediate;
@@ -199,6 +213,8 @@ module rv32i_top #(
             .wb_rd(wb_rd),
         
             //outputs
+            .out_rs1(id_rs1),
+            .out_rs2(id_rs2),
             .out_reg_value_1(id_reg_value_1),
             .out_reg_value_2(id_reg_value_2),
             .out_immediate(id_immediate),
@@ -223,6 +239,9 @@ module rv32i_top #(
             //inputs
             .clk(clk),
     
+            .forward_rs1(forward_rs1),
+            .forward_rs2(forward_rs2),
+            .forward_value(wb_write_value),
             .reg_value_1(id_ex_reg_value_1),          
             .reg_value_2(id_ex_reg_value_2),                    
             .immediate(id_ex_immediate),                    
@@ -267,5 +286,21 @@ module rv32i_top #(
             .out_wb_write_value(wb_write_value)
             
         );
-    
+        
+             
+        forwarding_unit fwd_inst (
+            
+            //inputs
+            .id_ex_rs1(id_ex_rs1),
+            .id_ex_rs2(id_ex_rs2),
+            .ex_wb_rd(ex_wb_rd),
+            .ex_wb_reg_write(ex_wb_reg_write),
+            
+            //outputs
+            .forward_rs1(forward_rs1),
+            .forward_rs2(forward_rs2)
+            
+        );        
+        
+        
 endmodule

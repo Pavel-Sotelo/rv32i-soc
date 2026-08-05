@@ -6,6 +6,14 @@ module ex_stage(
 
     //Inputs
 
+        //Forwarding input signals:
+        
+        input logic forward_rs1,
+        input logic forward_rs2,
+        input logic [31:0] forward_value,
+            
+        //Normal inputs: 
+        
         input logic [31:0] reg_value_1,          
         input logic [31:0] reg_value_2,        
         
@@ -44,16 +52,26 @@ module ex_stage(
 
     );
     
+    
+    
     //Drive general outputs to wb
     assign out_reg_write = reg_write;
     assign out_rd = rd;
     assign out_write_back_src = write_back_src;
     assign out_current_pc_plus_4 = current_pc_plus_4;
     
+    //forward_value is wb_write_value, already muxed by write_back_src, so it is
+    //correct for ALU results, loads (data_memory) and JAL return addresses
+    logic [31:0] forwarded_rs2;
+    assign forwarded_rs2 = forward_rs2 ? forward_value : reg_value_2; 
     
-    //ALU second operand logic
+    //ALU operands logic
+    logic [31:0] alu_first_operand;
     logic [31:0] alu_second_operand;
-    assign alu_second_operand = reg_or_imm? reg_value_2 : immediate;
+    
+    assign alu_first_operand = forward_rs1 ? forward_value : reg_value_1;
+    //forwarding applies only when the operand is a register, so reg_or_imm selects first
+    assign alu_second_operand = reg_or_imm? forwarded_rs2 : immediate;
     
     
     //Branch/jump logic
@@ -70,7 +88,7 @@ module ex_stage(
 
     alu alu_inst (
     
-        .a(reg_value_1),
+        .a(alu_first_operand),
         .b(alu_second_operand),
         
         .operation(alu_op),
@@ -88,13 +106,14 @@ module ex_stage(
         .take_branch(take_branch)
         
     );
-    
+       
+ 
     data_memory data_memory_inst (
     
         .clk(clk),
         .addr(out_alu_result),
         .write_enable(write_mem),
-        .write_data(reg_value_2),
+        .write_data(forwarded_rs2),
         .read_data(out_d_mem_read_data)
     
     );

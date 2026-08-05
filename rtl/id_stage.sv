@@ -20,6 +20,11 @@ module id_stage(
         
     //Outputs
     
+        //Register numbers, used by forwarding_unit to detect stale operands
+        output logic [4:0] out_rs1,
+        output logic [4:0] out_rs2,
+    
+        //Register 32-bit number values
         output logic [31:0] out_reg_value_1,
         output logic [31:0] out_reg_value_2,
         
@@ -43,6 +48,9 @@ module id_stage(
         output logic [31:0] out_current_pc_plus_4  
     
     );
+
+    assign out_rs1 = instruction[19:15];
+    assign out_rs2 = instruction[24:20];
 
     assign out_current_pc = current_pc;
     assign out_current_pc_plus_4 = current_pc_plus_4;

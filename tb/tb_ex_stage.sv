@@ -7,7 +7,9 @@ module tb_ex_stage();
     logic clk;
 
     //DUT Inputs
-
+        logic forward_rs1;
+        logic forward_rs2;
+        logic [31:0] ex_wb_alu_result;
         logic [31:0] reg_value_1;          
         logic [31:0] reg_value_2;           
         logic [31:0] immediate;             
@@ -39,6 +41,9 @@ module tb_ex_stage();
     ex_stage DUT (
     
         .clk(clk),
+        .forward_rs1(forward_rs1),
+        .forward_rs2(forward_rs2),
+        .ex_wb_alu_result(ex_wb_alu_result),
         .reg_value_1(reg_value_1),
         .reg_value_2(reg_value_2),
         .immediate(immediate),
@@ -90,6 +95,9 @@ module tb_ex_stage();
         $display("Start of ex_stage testbench:");
     
         //initialize ALL DUT inputs to zero, to avoid X's in simulation
+        forward_rs1 = 1'b0;
+        forward_rs2 = 1'b0;
+        ex_wb_alu_result = 32'd0;
         reg_value_1 = 32'd0;
         reg_value_2 = 32'd0;
         immediate = 32'd0;
@@ -127,6 +135,12 @@ module tb_ex_stage();
         
                 5. Pass throughs: rd, reg_write, write_back_src, current_pc_plus_4 cross
                    unchanged. rd = 31 sets all five bits, catching a truncated port width.
+                   
+                6. NEW: Forwarding on operand 1 of ALU: assume reg_value_1 is a stale value,
+                   with forward_rs1 HIGH, the alu_result should use ex_wb_alu_result, not with reg_value_1.
+                   
+                7. NEW: Forwarding on operand 2 doesn't override an immediate: reg_or_imm = 0 (select imm),
+                   with forward_rs2 HIGH, expect immediate, not ex_wb_alu_result.        
         */            
     
         $display("");
@@ -224,7 +238,9 @@ module tb_ex_stage();
             jump= 1'b0;
             #1;
             check("TC4 use_target = 0 when no branch or jump", out_use_target, 1'b0);
-            #10;  
+            #10;
+            
+        //End of TC4.      
         
         $display("");        
         //TC5:
@@ -240,8 +256,39 @@ module tb_ex_stage();
             check("TC5 out_current_pc_plus_4 passed", out_current_pc_plus_4, 32'd104);
             #10;
         
-        //End of TC5
+        //End of TC5.
+        
+        
+        $display("");        
+        //TC6:        
+        
+            forward_rs1 = 1;
+            reg_value_1 = 32'd99;         //stale value, should be ignored
+            reg_value_2 = 32'd3;
+            ex_wb_alu_result = 32'd7;     //forwarded value, should be used
+            reg_or_imm = 1; alu_op = 3'b00; //ADD
+            #1;
+            //expect out_alu_result = 10, not 102
+            check("TC6 with forward_rs1 = 1, out_alu_result = 10 decimal - forwarding success", out_alu_result, 32'd10);
+            #10;
             
+        //End of TC6.         
+        
+        
+        $display("");        
+        //TC7:        
+        
+            forward_rs1 = 0;
+            forward_rs2 = 1; reg_or_imm = 0;
+            reg_value_1 = 32'd35;
+            immediate = 32'd5; ex_wb_alu_result = 32'd99;
+            #1;
+            //expect the ALU to use 5, not 99. result must be 5 + 35 = 40, not 99 + 35 = 134
+            check("TC7 with forward_rs2 = 1 and reg_or_imm - 0 (select immediate), out_alu_result = 40 decimal", out_alu_result, 32'd40); 
+            #10;
+            
+        //End of TC7.          
+        
         $display("");
         $display("End of ex_stage testbench.");
         $display("");            
