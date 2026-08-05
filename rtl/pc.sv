@@ -14,7 +14,7 @@ module pc(
         if(reset)
             out_pc <= 32'd0;
         else
-            out_pc = next_pc;
+            out_pc <= next_pc;
     
     end
 
