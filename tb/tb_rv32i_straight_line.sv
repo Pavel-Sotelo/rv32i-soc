@@ -1,7 +1,7 @@
 `timescale 1ns / 1ps 
 
 //First CPU Testbench: Straight-line instructions (no branches or jumps, PC increments only)
-module tb_rv32i_top_cpu();
+module tb_rv32i_straight_line();
 
     localparam CLK_PERIOD = 10;    
 
