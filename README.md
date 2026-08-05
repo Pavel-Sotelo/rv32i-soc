@@ -26,11 +26,26 @@ register and memory state.
 - [x] Branch resolution (BEQ, BNE) — EX → IF redirect, 2-cycle flush, counted loop running
 - [x] ISS — branches (BEQ), jumps (JAL)
 - [x] Co-simulation (RTL vs ISS) — final register state, loop program passes
-- [ ] Forwarding (data hazard resolution)
-- [ ] Remaining branches (BLT, BGE, BLTU, BGEU) — needs signed/unsigned comparison
-- [ ] JAL / JALR
-- [ ] Timing closure / Fmax
+- [x] Forwarding — 1-back via forwarding unit, 2-back via register file bypass, no stall
+- [ ] CPU running on the physical Basys 3
+- [ ] Timing closure and Fmax — critical path identified and documented
 - [ ] AXI4-Lite integration (CPU ↔ UART)
+- [ ] Fibonacci and factorial running on hardware, output over UART
+
+## Scope for v1.0
+
+Some RV32I instructions are deliberately left out. The demo programs are counted
+loops with word-aligned memory access, so they need arithmetic and logic R/I-types,
+`lw`, `sw`, `lui`, `beq` and `bne` — all implemented.
+
+Not implemented: `blt`, `bge`, `bltu`, `bgeu` (the sign bit of a subtraction cannot
+give a correct signed comparison when the subtraction overflows, so these need
+either a funct3-dependent ALU operation or a dedicated comparator). byte and
+halfword loads and stores (which need lane enables in the data memory); `jalr` and
+`auipc`.
+
+None of these block the project's goals — bus integration, co-simulation, measured
+timing, and verification discipline — so ISA coverage is deferred, not forgotten.
 
 ## Architecture
 
@@ -127,6 +142,7 @@ work later in the project targets.
 - `iss/` — C instruction-set simulator (golden reference model)
 - `tools/` — Python assembler
 - `programs/` — assembly source and generated hex, one folder per program
+- `cosim/` — register dumps from the RTL and the ISS, compared per program
 - `docs/` — design notes and bug logs
 
 ## Target

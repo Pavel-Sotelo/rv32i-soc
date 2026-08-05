@@ -727,3 +727,61 @@ not speed.
   containing word rather than trapping. The RISC-V spec permits either behaviour.
   Acceptable while only LW and SW exist; byte and halfword accesses would force the
   question.
+
+---
+
+## Data Hazards and Forwarding
+
+- **Two distinct hazards, two different fixes.** A dependency one instruction back
+  is fixed by forwarding into EX; a dependency two instructions back is fixed by a
+  write-first bypass inside the register file. Three instructions back needs
+  nothing, since by then the write has landed and an ordinary read returns it.
+
+- **Forwarding targets the ALU inputs in EX, not the register read in ID.**
+  Forwarding into ID would mean chaining the ALU output onto the end of the
+  register-file read path within one clock period — ID already measures 5.814 ns
+  and EX 5.503 ns, so the combined path would not close at 100 MHz. Forwarding
+  into EX costs one cycle of waiting, by which point the value sits in a register:
+  flop → mux → ALU, a short path.
+
+- **The register file's bypass is not forwarding.** It is a comparison inside
+  `register_file` that returns the incoming `write_value` when a read targets the
+  register being written that cycle. x0 is checked first so the hardwiring cannot
+  be broken by a write to x0. One comparator and one mux per read port, against a
+  second forwarding path with its own comparisons and a wider mux. The cost is
+  that it lengthens the ID critical path, which is already the slower stage.
+
+- **The register numbers travel, not just the values.** The pipeline carried
+  `reg_value_1` and `reg_value_2` but discarded `rs1` and `rs2`, so there was
+  nothing to compare against `ex_wb_rd`. Adding the two 5-bit numbers to the ID→EX
+  register is what makes the comparison possible at all.
+
+- **`wb_write_value` is the forwarded value, not `ex_wb_alu_result`.** Three
+  different values can be written back — the ALU result, loaded data, and JAL's
+  return address — and `wb_stage` already selects among them using
+  `write_back_src`. Forwarding its output inherits that decision, so the
+  forwarding select stays one bit and no mux is duplicated. Forwarding
+  `ex_wb_alu_result` instead would forward a load's *address* rather than its data.
+
+- **Load-use needs no stall here, which is unusual.** In a textbook pipeline a
+  load's value is not available until after the consumer needs it, and the only
+  fix is a one-cycle interlock. In this design the data memory's output register
+  *is* the EX→WB boundary, so the loaded value appears exactly one cycle after the
+  address — precisely when the next instruction's ALU wants it. The same decision
+  that removed the MEM stage removed the load-use stall.
+
+- **Forwarding is chosen over stalling, and it costs frequency.** A stall would
+  freeze the consumer until the value lands in the register file, which is simpler
+  but wastes cycles on every dependent pair, and dependent pairs dominate real
+  code. Forwarding costs muxes sitting directly on the ALU's operand inputs — on
+  the EX critical path, which was already within 0.31 ns of ID. Fmax is traded for
+  CPI, and the post-forwarding timing numbers are the measurement of that trade.
+
+- **Store data is forwarded too.** `data_memory`'s `write_data` comes from
+  `forwarded_rs2` rather than raw `reg_value_2`, so a store whose data was
+  produced by the previous instruction writes the correct value.
+
+- **The forwarding unit is a separate module.** Two comparisons, each gated by
+  `reg_write` and an x0 guard. Small, but the guard is easy to omit and only shows
+  up as a wrong value in a running program — `tb_forwarding_unit` covers one case
+  per condition failing, which a CPU-level test cannot isolate.

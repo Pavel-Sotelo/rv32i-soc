@@ -50,3 +50,65 @@ it: the straight-line program contains no branches, and `tb_ex_stage` drives
 `reg_or_imm` by hand rather than taking it from `control_unit`, so it verified the mux
 against its own assumption instead of against the decoder. The bug lived precisely in
 the gap between two modules that were each individually correct.
+
+---
+
+## 2026-08-04 — Blocking assignment in `pc.sv` shifted every fetch by one instruction
+
+**Module:** `pc.sv`
+
+**Cause:** Inside `always_ff`, the else branch used `=` instead of `<=`. I do not
+know when this was introduced — a typo made while editing something else, and
+nothing failed, so it went unnoticed.
+
+**Root cause:** A blocking assignment updates immediately rather than at the end
+of the timestep, so the PC advanced within the same clock edge.
+`instruction_memory` samples `addr` on that edge and captured the already-advanced
+address, returning the *next* instruction. Every fetch was off by one.
+
+**Fix:** `out_pc <= next_pc;`
+
+**How it was caught:** A new forwarding test gave wrong results. Printing the PC
+and the fetched instruction every cycle showed the PC reading 0 while the
+instruction was `imem[1]` — the first instruction never executed.
+
+**Why it survived:** A second bug cancelled it. `second_flush` was never reset in
+`rv32i_top`, so it held X out of reset and the flush squashed the first
+instruction. One bug skipped an instruction, the other shifted every fetch forward
+by one, and together they produced correct output for days.
+
+The stage testbenches could not have caught it: `tb_if_stage` checks that the PC
+increments, `tb_id_stage` that instructions decode — both true. What was wrong is
+the relationship between them, which no single-module testbench can observe.
+
+**After the fix:** all three CPU programs re-run and pass with the normal
+one-cycle reset, so the fetch is genuinely corrected. A three-cycle reset had made
+the symptom vanish during debugging, but that was a workaround.
+
+---
+
+## 2026-08-04 — Forwarding `ex_wb_alu_result` was wrong for loads and jumps
+
+**Module:** `ex_stage.sv`, `rv32i_top.sv`
+
+**Cause:** With forwarding working for arithmetic, a load followed immediately by
+a use still read a stale operand: `lw x1, 0(x0)` then `addi x2, x1, 3` gave
+`x2 = 3` instead of 45.
+
+**Root cause:** The forwarding mux selected `ex_wb_alu_result`. For a load that
+register holds the memory *address*, not the loaded value — the data arrives on
+`d_mem_read_data`. The same applies to JAL, whose result is `current_pc_plus_4`.
+The forwarding unit was correctly deciding *whether* to forward, but the datapath
+was forwarding the wrong value.
+
+**Fix:** Forward `wb_write_value` instead. `wb_stage` has already selected among
+the ALU result, the loaded data and the JAL return address using `write_back_src`,
+so a single signal is correct for all three and the forwarding select stays 1 bit.
+The alternative — widening the mux and passing `write_back_src` into the
+forwarding unit — would have duplicated a mux that already exists.
+
+**How it was caught:** A directed load-use program, written specifically to test
+whether the hazard existed. Confirmed by printing `d_mem_read_data`,
+`write_back_src`, `id_ex_rs1` and `ex_wb_rd` in the cycle the dependent
+instruction was in EX: all four were correct, which proved the value was available
+and the problem was mux selection rather than timing.
