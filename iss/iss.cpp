@@ -26,6 +26,7 @@ typedef struct {
 void load_program_add_5_3(CPUState *cpu);
 void load_program_6_instr(CPUState *cpu);
 void load_program_first_loop(CPUState *cpu);
+void load_program_forwarding(CPUState *cpu);
 
 uint32_t fetch(CPUState *cpu);
 uint32_t decode_opcode(uint32_t instruction);
@@ -63,7 +64,7 @@ int main ()
 
     //load the program (hex instructions)
 
-    load_program_first_loop(&cpu_state);
+    load_program_forwarding(&cpu_state);
 
     for(uint32_t i = 0; i < cpu_state.program_size; i++)
     {
@@ -239,7 +240,7 @@ int main ()
                 printf("x%d = %u\n", i, cpu_state.regs[i]);
 
         //Set txt file printing each final register 32-bit number (co-simulation)        
-        FILE *f = fopen("iss_regs_first_loop.txt", "w");
+        FILE *f = fopen("iss_regs_forwarding.txt", "w");
         for (int i = 0; i < 32; i++)
             fprintf(f, "x%d = %08x\n", i, cpu_state.regs[i]);
         fclose(f);                
@@ -308,6 +309,26 @@ return 0;
 
         //store the number of instructions
         cpu->program_size = 10;
+    }
+
+
+
+    //load first program_forwarding to the instruction memory
+    void load_program_forwarding(CPUState *cpu)
+    {
+
+        cpu->imem[0] = 0x00500093;     
+        cpu->imem[1] = 0x00308113;
+        cpu->imem[2] = 0x001101b3;
+        cpu->imem[3] = 0x402183b3;    
+        cpu->imem[4] = 0x02a00213;
+        cpu->imem[5] = 0x00402023;
+        cpu->imem[6] = 0x00002283;
+        cpu->imem[7] = 0x00328313;
+
+        
+        //store the number of instructions
+        cpu->program_size = 8;
     }
 
 
