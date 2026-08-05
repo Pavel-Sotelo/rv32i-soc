@@ -18,11 +18,18 @@ module register_file(
     
     //MATRIX REGISTER: 32 registers, each one holding a 32-bit number (32x32)
     logic [31:0] register [31:0];
-    
+
+
     //read registers, x0 forced to read 0, ISA RISC-V specification
-    assign out_rs1 = (rs1 == 5'b0)? 32'b0 : register [rs1];
-    assign out_rs2 = (rs2 == 5'b0)? 32'b0 : register [rs2];
+
+    //write-first bypass (forwarding): a read of the register being written this cycle returns the
+    //incoming value, not the stale stored one. x0 checked first so it stays hardwired. 
+
+    assign out_rs1 = (rs1 == 5'b0)? 32'b0 : (write_enable && rd == rs1)? write_value : register [rs1];
+    assign out_rs2 = (rs2 == 5'b0)? 32'b0 : (write_enable && rd == rs2)? write_value : register [rs2];
     
+
+    //Write register (synchronous write)
     always_ff @(posedge clk) begin
     
         //reset is for waverform purposes , to start all register values to 0 and not X's

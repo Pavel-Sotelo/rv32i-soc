@@ -109,7 +109,8 @@ module tb_register_file();
                 4. Trying to write a register with write_enable = 0 , register should keep its old value (not update)
                 5. Overwrite: writing a value to a register , then another one , to confirm t updates correctly
                 6. Read before write posedge clk: in the same moment a write is requested, read the register (before the posedge clk) read must show the old value
-                7. Reset registers: raising reset HIGH should clear all 32 registers back to 0
+                7. Test Write-first bypass (forwarding)
+                8. Reset registers: raising reset HIGH should clear all 32 registers back to 0
                   
         */
         
@@ -180,7 +181,43 @@ module tb_register_file();
         #1;
         $display("");
         
-        //TC7: Reset registers - raising reset HIGH should clear all 32 registers back to 0
+        
+        //TC7: Write-first bypass for forwarding (NEW: August 3)      
+        
+        //first, we write a value to x15
+        
+        do_write(5'd15, 32'd235, 1);
+        check ("TC7a x15 = 235 decimal", DUT.register[5'd15], 32'd235);        
+
+        //We will raise write_enable (wb signal input) and try to read the same register
+        // that wb is trying to write, we're going to get the new wb_value for that register in the same cycle, not the old one.
+        rs1 = 5'd15;
+        rd = 5'd15;
+        write_enable = 1;
+        write_value = 32'd111;
+        #1;
+        
+        check ("TC7b out_rs1 returned the NEW value of x15 when wb is going to write the same register that rs1 is trying to read, all in the same cycle", out_rs1, 32'd111);
+        #10;
+        
+        //now we make sure that with different registers, we get read-first (old value, no-forwarding)
+        //x15 is now 111 decimal
+        
+        rs1 = 5'd15;
+        rd = 5'd24;
+        write_enable = 1;
+        write_value = 32'd313;
+        #1;
+        
+        check ("TC7c out_rs1 returned old value of x15 when wb is going to write but rd and rs1 are not the same registers", out_rs1, 32'd111);
+        #1;
+        write_enable = 0;
+        #10;        
+        
+        $display("");        
+        
+
+        //TC8: Reset registers - raising reset HIGH should clear all 32 registers back to 0
         
         reset = 1;
         
@@ -194,7 +231,7 @@ module tb_register_file();
         #1;
         
         // we use $sformatf (building a valid string from variables) to show the i variables in tcl console
-        check($sformatf("TC7 - register x%0d reseted to 0", i), out_rs1, 32'd0);
+        check($sformatf("TC8 - register x%0d reseted to 0", i), out_rs1, 32'd0);
         
         end
         
