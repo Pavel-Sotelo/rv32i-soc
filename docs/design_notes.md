@@ -728,60 +728,72 @@ not speed.
   Acceptable while only LW and SW exist; byte and halfword accesses would force the
   question.
 
+
 ---
 
-## Data Hazards and Forwarding
+## FPGA Fabric — what the resource report is counting
 
-- **Two distinct hazards, two different fixes.** A dependency one instruction back
-  is fixed by forwarding into EX; a dependency two instructions back is fixed by a
-  write-first bypass inside the register file. Three instructions back needs
-  nothing, since by then the write has landed and an ordinary read returns it.
+Notes on the primitives behind the utilisation numbers, since the report means
+nothing without them.
 
-- **Forwarding targets the ALU inputs in EX, not the register read in ID.**
-  Forwarding into ID would mean chaining the ALU output onto the end of the
-  register-file read path within one clock period — ID already measures 5.814 ns
-  and EX 5.503 ns, so the combined path would not close at 100 MHz. Forwarding
-  into EX costs one cycle of waiting, by which point the value sits in a register:
-  flop → mux → ALU, a short path.
+- **LUTs compute; flip-flops store.** A look-up table is a small memory holding a
+  truth table — feed it up to six input bits and it returns the answer. Every mux,
+  comparison, decode and arithmetic operation becomes LUTs. A flip-flop holds one
+  bit and updates on the clock edge. They sit side by side in a slice, which
+  matches how the RTL reads: logic computes a value, a register captures it. This
+  design uses 483 LUTs (ALU, control unit, immediate generator, forwarding
+  comparisons, every mux) and 537 flip-flops (the register file's 1024 bits, both
+  pipeline registers, the PC, the instruction memory output register).
 
-- **The register file's bypass is not forwarding.** It is a comparison inside
-  `register_file` that returns the incoming `write_value` when a read targets the
-  register being written that cycle. x0 is checked first so the hardwiring cannot
-  be broken by a write to x0. One comparator and one mux per read port, against a
-  second forwarding path with its own comparisons and a wider mux. The cost is
-  that it lengthens the ID critical path, which is already the slower stage.
+- **Block RAM comes in fixed sizes.** The XC7A35T has 50 tiles of 36 Kb — the
+  1,800 Kb figure on the box. A tile splits once into two independent 18 Kb
+  halves, and no further; that is a property of the silicon. The data memory is
+  256 words × 32 bits = 8 Kb, so it takes one 18 Kb half and Vivado reports 0.50
+  of a tile. The remaining 10 Kb of that half is wasted, and a second small memory
+  could occupy the other half of the same tile.
 
-- **The register numbers travel, not just the values.** The pipeline carried
-  `reg_value_1` and `reg_value_2` but discarded `rs1` and `rs2`, so there was
-  nothing to compare against `ex_wb_rd`. Adding the two 5-bit numbers to the ID→EX
-  register is what makes the comparison possible at all.
+- **IO are physical package pins, and they are the scarce resource.** Every port
+  on the top module becomes a pin: `clk`, `reset`, and 16 LEDs, so 18 of 106.
+  Internal signals cost nothing; pins cost immediately. Setting a stage module as
+  top by mistake asks for 316 pins and fails placement outright — a useful
+  accident, since it makes the asymmetry obvious.
 
-- **`wb_write_value` is the forwarded value, not `ex_wb_alu_result`.** Three
-  different values can be written back — the ALU result, loaded data, and JAL's
-  return address — and `wb_stage` already selects among them using
-  `write_back_src`. Forwarding its output inherits that decision, so the
-  forwarding select stays one bit and no mux is duplicated. Forwarding
-  `ex_wb_alu_result` instead would forward a load's *address* rather than its data.
+- **The ALU's adder uses dedicated carry hardware, not LUTs.** Adding two 32-bit
+  numbers is a chain: each bit's result depends on the carry from the bit below,
+  so bit 0 must settle before bit 1, and so on. Built from ordinary LUTs that
+  would be very slow, so the fabric provides CARRY4 blocks — four bits of carry
+  each, with dedicated fast wiring. A 32-bit adder uses eight of them. This is why
+  a path with nine elements in series can still spend only 2.7 ns computing: most
+  of those elements are carry blocks, not general logic.
 
-- **Load-use needs no stall here, which is unusual.** In a textbook pipeline a
-  load's value is not available until after the consumer needs it, and the only
-  fix is a one-cycle interlock. In this design the data memory's output register
-  *is* the EX→WB boundary, so the loaded value appears exactly one cycle after the
-  address — precisely when the next instruction's ALU wants it. The same decision
-  that removed the MEM stage removed the load-use stall.
+---
 
-- **Forwarding is chosen over stalling, and it costs frequency.** A stall would
-  freeze the consumer until the value lands in the register file, which is simpler
-  but wastes cycles on every dependent pair, and dependent pairs dominate real
-  code. Forwarding costs muxes sitting directly on the ALU's operand inputs — on
-  the EX critical path, which was already within 0.31 ns of ID. Fmax is traded for
-  CPI, and the post-forwarding timing numbers are the measurement of that trade.
+## Reading a Timing Report
 
-- **Store data is forwarded too.** `data_memory`'s `write_data` comes from
-  `forwarded_rs2` rather than raw `reg_value_2`, so a store whose data was
-  produced by the previous instruction writes the correct value.
+- **Delay splits into two kinds, and they have opposite fixes.** Vivado reports
+  *logic delay* (time inside gates) separately from *net delay* (time travelling
+  on wires between them). A path that is logic-limited has too many gates in
+  series, and the fix is a pipeline register splitting one long chain into two
+  short ones. A path that is net-limited spends its time in transit, and
+  pipelining does nothing — a register in the middle does not shorten a wire. The
+  fix there is physical: closer placement, or fewer destinations to reach.
 
-- **The forwarding unit is a separate module.** Two comparisons, each gated by
-  `reg_write` and an x0 guard. Small, but the guard is easy to omit and only shows
-  up as a wrong value in a running program — `tb_forwarding_unit` covers one case
-  per condition failing, which a CPU-level test cannot isolate.
+- **Fanout is how many places one signal must drive.** High fanout is slow twice
+  over: more gate inputs to switch, and no way to place all the destinations
+  nearby. The standard fix is replication — build a second copy of the driving
+  register, same input and clock, and split the loads between them. Same
+  behaviour, shorter wires. In this design `ex_wb_rd` reaches 129 places: the
+  forwarding comparators, the write-back mux, and the register file's write port.
+
+- **`Fmax = 1 / (period − WNS)` is a floor, not the answer.** The formula assumes
+  the critical path's delay is a fixed property of the design. It is not: the
+  placer and router stop optimising once the constraint is met. Measured from a
+  relaxed 100 MHz build the formula gave 118 MHz; tightening the constraint step
+  by step until setup failed gave 150.6 MHz — the same RTL, a better physical
+  arrangement, a 27% gap. The only honest way to get Fmax is to push until it
+  breaks.
+
+- **The reported critical path at a loose constraint is not the real bottleneck.**
+  At 100 MHz with 1.5 ns of slack, the worst path was inside the data memory. At
+  6.640 ns it was the forwarding comparison feeding the store data path. Squeezing
+  the design is what makes the true limiter surface.

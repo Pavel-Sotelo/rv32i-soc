@@ -7,12 +7,12 @@ interface, verified by running the same programs on both the RTL and a C
 instruction set simulator (ISS) written from scratch, and comparing the final
 register and memory state.
 
-**Status: in progress** — CPU core executes loops with branches; co-simulation against the ISS next.
+**Status: in progress** — CPU runs on the Basys 3 at 100 MHz with full data-hazard forwarding, verified by co-simulation. AXI4-Lite integration next.
 
 ## Progress
 - [x] ALU — RV32I integer ops (ADD, SUB, AND, OR, XOR, SLL, SRL, SRA, SLT, SLTU), 9-case testbench
 - [x] Register file (32×32, 2 read / 1 write, x0 hardwired)
-- [x] Instruction memory (BRAM ROM, $readmemh program load)
+- [x] Instruction memory (ROM, `$readmemh` program load)
 - [x] ISS skeleton (C reference model) — CPUState, fetch/decode/execute, R-type + I-type arithmetic
 - [x] IF stage — PC register, fetch logic, branch/jump target mux
 - [x] ID stage — control unit, immediate generator (all 6 formats), register file read
@@ -20,15 +20,13 @@ register and memory state.
 - [x] Data memory (BRAM, synchronous read, byte→word addressing)
 - [x] EX + WB stage modules (ALU path, memory path, write-back mux)
 - [x] First working CPU — top module, straight-line program executing
-- [x] Python assembler — all six RV32I formats, .s source → .hex output
-- [x] Branch and jump resolution (EX → IF redirect, 2-cycle flush)
 - [x] Python assembler — all six RV32I formats, `.s` source → `.hex` output
 - [x] Branch resolution (BEQ, BNE) — EX → IF redirect, 2-cycle flush, counted loop running
-- [x] ISS — branches (BEQ), jumps (JAL)
-- [x] Co-simulation (RTL vs ISS) — final register state, loop program passes
+- [x] ISS — branches (BEQ, BNE), jumps (JAL)
+- [x] Co-simulation (RTL vs ISS) — final register state compared automatically
 - [x] Forwarding — 1-back via forwarding unit, 2-back via register file bypass, no stall
-- [ ] CPU running on the physical Basys 3
-- [ ] Timing closure and Fmax — critical path identified and documented
+- [x] CPU running on the physical Basys 3
+- [x] Timing closure and Fmax — 100 MHz operating point, 150.6 MHz measured
 - [ ] AXI4-Lite integration (CPU ↔ UART)
 - [ ] Fibonacci and factorial running on hardware, output over UART
 
@@ -49,8 +47,8 @@ timing, and verification discipline — so ISA coverage is deferred, not forgott
 
 ## Architecture
 
-Harvard architecture — instruction and data memories are separate BRAM blocks,
-so fetch and data access never contend for one memory port.
+Harvard architecture — instruction and data are separate memories, so fetch and
+data access never contend for one port.
 
 ### Update, 30 July 2026: this core is 4-stage, not 3-stage
 
@@ -59,10 +57,10 @@ pipeline registers I wrote myself, and I wrote two. But a pipeline register is
 any register that separates two stages — it does not matter who put it there.
 Counting that way gives three boundaries and four stages.
 
-The one I missed is IF→ID. My instruction memory is BRAM, and BRAM reads are
-synchronous: the instruction arrives one cycle after the address is presented.
-That output register is a pipeline register — I just didn't type it. So fetch
-gets its own cycle, and IF and ID are separate stages.
+The one I missed is IF→ID. My instruction memory has a registered output: the
+instruction arrives one cycle after the address is presented. That output
+register is a pipeline register — I just didn't think of it as one. So fetch gets
+its own cycle, and IF and ID are separate stages.
 
 I had already used this exact reasoning elsewhere in the design. There is no MEM
 stage here because the data memory's output register serves as the EX→WB
@@ -72,9 +70,9 @@ IF→ID. Either both count as boundaries or neither does, so the design is
 
 | boundary | provided by |
 |---|---|
-| IF → ID | instruction BRAM output register |
-| ID → EX | pipeline register I wrote (14 signals) |
-| EX → WB | pipeline register I wrote (5 signals), plus the data memory BRAM output register for the loaded value |
+| IF → ID | instruction memory output register |
+| ID → EX | pipeline register I wrote (16 signals) |
+| EX → WB | pipeline register I wrote (5 signals), plus the data memory output register for the loaded value |
 
 One consequence: branches resolve in EX, which is stage 3, so two wrongly
 fetched instructions sit behind it in ID and IF. The branch penalty is 2 cycles,
@@ -96,18 +94,24 @@ I decided not to answer this by arguing. I built the first working CPU as
 4-stage, added timing constraints for the Basys 3's 100 MHz clock, ran
 implementation, and read the critical paths.
 
-**Baseline timing.** Post-implementation at 100 MHz. **This is a straight-line
-CPU — branch and jump resolution and forwarding are not built yet, and both add
-logic to the EX path. These numbers will get worse as those go in, and they are
-a starting point, not the final Fmax.**
+**Baseline timing, 30 July.** Post-implementation at 100 MHz, measured on a
+straight-line CPU before branch resolution and forwarding existed. These are
+*not* the current numbers — both additions land on the EX path and cost slack.
+See [Timing and Fmax](#timing-and-fmax) below for where the design stands now.
 
 | metric | value |
 |---|---|
-| WNS | 4.187 ns → Fmax ~172 MHz |
+| WNS | 4.187 ns |
 | failing endpoints | 0 |
-| worst path | instruction BRAM output → register file read → ID/EX register |
+| worst path | instruction memory output → register file read → ID/EX register |
 | ID critical path | 5.814 ns |
 | EX critical path | 5.503 ns |
+
+No Fmax is quoted here. This build was never stress-tested, and the formula
+estimate from a relaxed constraint understates the design — see
+[Timing and Fmax](#timing-and-fmax). The numbers above are used only to compare
+the two stages against each other, which they do fairly since both come from the
+same build.
 
 Two things came out of this.
 
@@ -125,16 +129,192 @@ spend, and forwarding lands directly on the EX path later, which would only make
 the merged version worse.
 
 So I kept 4 stages and chose frequency over CPI: I pay a 2-cycle branch penalty
-in exchange for timing closure with margin. The planned upgrade is 4 → 5 stages,
-splitting MEM back out of EX, which is one clean change from here.
+in exchange for timing closure with margin.
 
 **One more thing the report showed.** The worst path has only 2 levels of logic,
 and 4.796 ns of its 5.814 ns total is net delay — wires, not gates — on a signal
 with a fanout of 66. Pipelining fixes a path by cutting a long chain of gates
 into two shorter chains, but there is no long chain here to cut, and a register
 in the middle does not make a wire shorter. So more stages would not help this
-path; reducing fanout and improving placement would. That is what the timing
-work later in the project targets.
+path; reducing fanout and improving placement would.
+
+Everything above is the state before forwarding. The current numbers are in
+[Timing and Fmax](#timing-and-fmax).
+
+## Data hazards
+
+Two hazards, two fixes, no stalls.
+
+A dependency **one instruction back** is caught by a forwarding unit, which
+compares the destination register of the instruction in write-back against both
+source registers of the instruction in execute and muxes the value straight into
+the ALU inputs. Forwarding into decode instead would chain the ALU output onto
+the register-file read path inside one clock period, which would not close
+timing.
+
+A dependency **two instructions back** is caught by a write-first bypass inside
+the register file: a read of the register being written this cycle returns the
+incoming value rather than the stale stored one. Three instructions back needs
+nothing.
+
+The forwarded value is the write-back stage's output, not the ALU result.
+Write-back already picks between the ALU result, loaded data and a jump's return
+address, so forwarding its output inherits that choice — one signal covers all
+three and the forwarding select stays a single bit.
+
+**Load-use needs no stall here**, which a textbook pipeline cannot manage.
+Normally a loaded value is not ready until after the dependent instruction needs
+it, forcing a one-cycle interlock. Here the data memory's output register *is*
+the EX→WB boundary, so the loaded value appears exactly one cycle after the
+address — precisely when the next instruction's ALU wants it. The same decision
+that removed the MEM stage removed the load-use stall.
+
+Verified by co-simulation: eight back-to-back dependent instructions with no
+spacers, covering every forwarding path, matching the reference model exactly.
+
+## Timing and Fmax
+
+Two builds are reported here, and they answer different questions. The 100 MHz
+build *is* the CPU — it is the bitstream on the board, and the Basys 3's crystal
+is the only clock available. The tighter builds are experiments: they could never
+run, since there is no 150 MHz clock without a PLL, but they are how the ceiling
+gets measured.
+
+### Operating point
+
+The build running on the board, with `program_forwarding.hex` loaded:
+
+| metric | value |
+|---|---|
+| WNS | 1.781 ns |
+| WHS | 0.161 ns |
+| failing endpoints | 0 |
+
+![Timing summary at 100 MHz](docs/images/timing_100mhz.png)
+*Design timing summary at the 100 MHz operating point — all constraints met, no
+failing endpoints.*
+
+The critical path runs inside the data memory: its output register feeds the
+write-back mux, the forwarding mux and the ALU, and returns to the memory's own
+address port. That loop is what makes load-use forwarding work without a stall.
+
+| field | value |
+|---|---|
+| total delay | 7.592 ns |
+| — time inside gates | 3.943 ns |
+| — time travelling on wires | 3.649 ns |
+| gates in a row | 5 |
+
+Note that the numbers depend on which program is loaded. `$readmemh` bakes the
+program into the bitstream, so instruction types the program never uses leave
+decode paths unreachable and synthesis prunes them. These figures are for
+`program_forwarding.hex`, the program that exercises every hazard path.
+
+### How fast could it go: 150.8 MHz
+
+100 MHz is the clock the board provides, not the fastest this design can run. To
+find that, I tightened the clock constraint step by step and re-ran
+implementation until the design failed. These builds are measurements, not
+deliverables — the board cannot generate a 150 MHz clock without a PLL:
+
+| period | WNS | result |
+|---|---|---|
+| 6.631 ns | +0.056 ns | passes |
+| 6.630 ns | −0.372 ns | fails, 103 endpoints |
+
+**150.8 MHz**, narrowed down to a 1 picosecond boundary.
+
+![Passing at 6.631 ns](docs/images/fmax_stress_test_pass.png)
+*6.631 ns: closes with 0.056 ns to spare, no failing endpoints.*
+
+![Failing at 6.630 ns](docs/images/fmax_stress_test_fail.png)
+*6.630 ns: 103 endpoints fail. One picosecond lower is the difference between
+closure and a design that will not work.*
+
+The usual shortcut is `Fmax = 1 / (period − WNS)`, which from the 100 MHz numbers
+gives 122 MHz — an underestimate by 24%. The WNS itself is correct; the mistake is
+using it to predict a frequency. The formula assumes the path delay is fixed, but
+Vivado stops optimising once the constraint is met: given 10 ns with 1.8 ns to
+spare it had no reason to try harder, and given 6.6 ns it found a faster
+arrangement of the same RTL. That relaxed build costs nothing — timing is pass or
+fail, and extra slack buys nothing at a fixed 100 MHz — but it does mean the
+formula only ever gives a floor.
+
+How much harder the tool works is visible in the endpoint count: 704 at 10 ns
+against 1964 at 6.631 ns. Under pressure it replicates registers and splits logic
+that it was content to share when the constraint was loose.
+
+### Resource utilisation
+
+| resource | used | available | % |
+|---|---|---|---|
+| LUT | 448 | 20800 | 2.2 |
+| FF | 396 | 41600 | 1.0 |
+| BRAM | 0.5 | 50 | 1.0 |
+| IO | 18 | 106 | 17.0 |
+
+The data memory occupies half of one block RAM tile; everything else is a couple
+of percent of the device. Pins are the tightest resource at 17%, and the UART will
+add two more.
+
+### Why only one memory became a block RAM
+
+This design has three arrays and they synthesise three different ways, which is a
+useful illustration of how the tool decides.
+
+| array | contents change at runtime? | read | result |
+|---|---|---|---|
+| instruction memory | no | synchronous | constants folded into logic |
+| data memory | yes | synchronous | block RAM (RAMB18E1) |
+| register file | yes | **combinational** | flip-flops / distributed RAM |
+
+Two questions decide it, in order.
+
+**First: does it need real storage at all?** The instruction memory does not.
+`$readmemh` loads the program at synthesis time and there is no write port, so
+every one of its 256 entries is a compile-time constant. At that point it is not
+a memory — it is a fixed lookup table, and Vivado folds it into 90 LUTs. For a
+table where most entries are zero, that is far cheaper than spending a block RAM
+tile. The other two arrays do change while the CPU runs, so they need storage.
+
+**Second: what kind of storage?** Block RAM physically cannot read without a
+clock; the read is registered inside the primitive. The data memory reads
+synchronously, so it qualifies, and it becomes a RAMB18E1 occupying half a tile.
+The register file cannot: decode needs both operands in the same cycle it reads
+them, so its read is combinational, and a block RAM would deliver them a cycle
+late. It becomes flip-flops instead.
+
+So "it has a write port" is not enough to get a block RAM, and "the read is
+synchronous" is not enough either. Both have to hold.
+
+**This does not affect the four-stage argument.** The instruction memory's output
+register is written explicitly in the RTL — `instruction <= memory[addr]` inside
+an `always_ff` — so the flop exists no matter what happens to the array behind it.
+The IF→ID pipeline boundary exists either way.
+
+**Left as it is, deliberately.** A `rom_style = "block"` attribute would force the
+instruction memory into a BRAM and make the wording tidier, but constants in logic
+are faster than a memory lookup, so it would cost frequency for no gain.
+
+### On hardware
+
+The design runs on the Basys 3 at 100 MHz, executing the forwarding test program
+— the one that exercises every hazard path.
+
+The LEDs display the low 16 bits of the write-back value. That signal is chosen
+deliberately: every instruction that writes a register passes through the
+write-back mux, so producing it requires the whole datapath — fetch, decode, the
+pipeline registers, the ALU, the data memory and the forwarding logic. Driving the
+LEDs from a single register instead would let synthesis delete everything not
+needed to compute that one value, which it does: the endpoint count drops from
+2239 to 16.
+
+![CPU running on the Basys 3](docs/images/basys3_running_forwarding.jpeg)
+*Each bit's brightness reflects how often it is high. The program runs
+continuously — the instruction memory holds 256 words, so after the last
+instruction the program counter runs through zeroed entries, wraps, and starts
+again, roughly 390,000 laps a second at 100 MHz. Only the low bits light, which
+is what the program's results predict.*
 
 ## Structure
 - `rtl/` — SystemVerilog source
@@ -143,7 +323,8 @@ work later in the project targets.
 - `tools/` — Python assembler
 - `programs/` — assembly source and generated hex, one folder per program
 - `cosim/` — register dumps from the RTL and the ISS, compared per program
-- `docs/` — design notes and bug logs
+- `constraints/` — Basys 3 pin and clock constraints
+- `docs/` — design notes and bug logs, folder with readme images
 
 ## Target
 Xilinx Artix-7 (Basys 3), Vivado.
