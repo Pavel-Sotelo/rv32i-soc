@@ -2,12 +2,15 @@
 
 module rv32i_top #(
     
-    parameter string PROGRAM = "program_straight_line.hex"
+    parameter string PROGRAM = "program_forwarding.hex"
     
     )(
 
     input logic clk,
-    input logic reset
+    input logic reset,
+    
+    //debug output: without an observable port, implementation deletes the design
+    output logic [15:0] led
     
     ); 
 
@@ -93,12 +96,18 @@ module rv32i_top #(
     
 ////////////////////////////////////////////////////////////////////////    
 
+
     //Signal to do the 2nd cycle-flush of a branch/jump instruction
     logic second_flush;
+    
     
     //Signals for forwarding unit (1-back data hazard fix)
     logic forward_rs1;
     logic forward_rs2;
+
+
+    //Assign led output that shows value's being written - only for synthesis purposes
+    assign led = wb_write_value[15:0];
 
 
     //Pipeline output register boundary's
