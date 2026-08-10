@@ -8,6 +8,7 @@ module if_stage#(
     input logic reset,  
     input logic use_target,
     input logic [31:0] pc_target,
+    input logic stall,
     
     output logic [31:0] out_instruction,
     output logic [31:0] out_current_pc,
@@ -29,7 +30,7 @@ module if_stage#(
             out_current_pc <= 32'd0;
             out_current_pc_plus_4 <= 32'd4;
 
-        end else begin
+        end else if (~stall) begin
 
             out_current_pc <= current_pc;
             out_current_pc_plus_4 <= current_pc_plus_4;
@@ -43,6 +44,7 @@ module if_stage#(
         .clk(clk),  
         .reset(reset),
         .next_pc(next_pc),
+        .stall(stall),
         .out_pc(current_pc)
     
     );   

@@ -9,8 +9,13 @@ module rv32i_top #(
     input logic clk,
     input logic reset,
     
+    
     //debug output: without an observable port, implementation deletes the design
-    output logic [15:0] led
+    output logic [15:0] led,
+    
+    //UART I/O
+    input  logic rx,
+    output logic tx
     
     ); 
 
@@ -43,7 +48,7 @@ module rv32i_top #(
             logic id_branch;                  
             logic id_jump;     
             logic [31:0] id_current_pc;
-            logic [31:0] id_current_pc_plus_4;      
+            logic [31:0] id_current_pc_plus_4;     
     
          //pipeline register outputs
             logic [4:0] id_ex_rs1;       
@@ -55,8 +60,9 @@ module rv32i_top #(
             logic [2:0] id_ex_funct3; 
             logic id_ex_reg_write;             
             logic id_ex_reg_or_imm;              
-            logic [3:0] id_ex_alu_op;                            
-            logic id_ex_write_mem;              
+            logic [3:0] id_ex_alu_op;
+            logic id_ex_read_mem;                             
+            logic id_ex_write_mem;             
             logic [1:0] id_ex_write_back_src;    
             logic id_ex_branch;                  
             logic id_ex_jump;     
@@ -72,7 +78,10 @@ module rv32i_top #(
             logic  [1:0] ex_write_back_src;
             logic [31:0] ex_alu_result;
             logic [31:0] ex_d_mem_read_data;
-            logic [31:0] ex_current_pc_plus_4;           
+            logic [31:0] ex_current_pc_plus_4;
+            logic [31:0] ex_forwarded_rs2;
+            logic ex_is_uart;
+                       
 
         //outputs of EX -> IF, combinational (no flop, must arrive same cycle) 
             logic ex_if_use_target;
@@ -84,7 +93,7 @@ module rv32i_top #(
             logic  [1:0] ex_wb_write_back_src;
             logic [31:0] ex_wb_alu_result;
             logic [31:0] ex_wb_current_pc_plus_4;   
-    
+            logic ex_wb_is_uart;
         
     
     //wb_stage                 
@@ -96,92 +105,159 @@ module rv32i_top #(
     
 ////////////////////////////////////////////////////////////////////////    
 
-
-    //Signal to do the 2nd cycle-flush of a branch/jump instruction
-    logic second_flush;
+    //AXI4-Lite 
     
+    logic read_done;
+    logic [31:0] cpu_read_data;
     
-    //Signals for forwarding unit (1-back data hazard fix)
-    logic forward_rs1;
-    logic forward_rs2;
+    //Master 5 Channels:
 
 
-    //Assign led output that shows value's being written - only for synthesis purposes
-    assign led = wb_write_value[15:0];
-
-
-    //Pipeline output register boundary's
-    always_ff @(posedge clk) begin
+        //WRITE ADDRESS CHANNEL (AW)    
+        logic [3:0] AWADDR;
+        logic AWVALID;
+        logic AWREADY;
     
-        //reset to avoid X's in simulation
-        if (reset) begin
-        
-            id_ex_rs1 <= 5'b0;
-            id_ex_rs2 <= 5'b0;        
-            id_ex_reg_value_1 <= 32'b0;
-            id_ex_reg_value_2 <= 32'b0;
-            id_ex_immediate <= 32'b0;
-            id_ex_rd <= 5'b0;
-            id_ex_funct3 <= 3'b0;
-            second_flush <= 1'b0;
-            id_ex_reg_write <= 1'b0;
-            id_ex_write_mem <= 1'b0;
-            id_ex_reg_or_imm <= 1'b0;
-            id_ex_alu_op <= 4'b0;
-            id_ex_write_back_src <= 2'b0;
-            id_ex_branch <= 1'b0;
-            id_ex_jump <= 1'b0;
-            id_ex_current_pc <= 32'b0;
-            id_ex_current_pc_plus_4 <= 32'b0;
+        //WRITE DATA CHANNEL (W)
+        logic [31:0] WDATA;
+        logic WVALID;
+        logic WREADY;    
     
-            ex_wb_reg_write <= 1'b0;
-            ex_wb_rd <= 5'b0;
-            ex_wb_write_back_src <= 2'b0;
-            ex_wb_alu_result <= 32'b0;
-            ex_wb_current_pc_plus_4 <= 32'b0;
+        //WRITE RESPONSE CHANNEL (B)
+        logic [1:0] BRESP;
+        logic BVALID;
+        logic BREADY;  
+    
+        //READ ADDRESS CHANNEL (AR)
+        logic [3:0] ARADDR;
+        logic ARVALID;
+        logic ARREADY;   
+    
+        //WRITE RESPONSE CHANNEL (B)
+        logic [31:0] RDATA;
+        logic [1:0] RRESP;
+        logic RVALID;
+        logic RREADY;  
+
+////////////////////////////////////////////////////////////////////////
+
+//CPU Logic:
+
+        //Signal to do the 2nd cycle-flush of a branch/jump instruction
+        logic second_flush;
         
         
-        end else begin
+        //Signals for forwarding unit (1-back data hazard fix)
+        logic forward_rs1;
+        logic forward_rs2;
+    
+    
+        //stall when a load targets the UART: the AXI read takes several cycles,
+        //but the pipeline expects the loaded value in the next one
+        logic stall;
+        assign stall = ex_is_uart && id_ex_read_mem && ~read_done;
         
+        
+        //Mux to decide if lw data is from UART or from data memory, for wb stage
+        logic [31:0] final_read_data;
+        assign final_read_data = ex_wb_is_uart ? cpu_read_data : ex_d_mem_read_data;
+        
+    
+        //Assign led output that shows value's being written - only for synthesis purposes
+         assign led = wb_write_value[15:0];
+    
+
+    //Pipeline output register boundary's:
+    
+        //Boundary 1: ID->EX
+        always_ff @(posedge clk) begin
+        
+            //reset to avoid X's in simulation
+            if (reset) begin
+            
+                id_ex_rs1 <= 5'b0;
+                id_ex_rs2 <= 5'b0;        
+                id_ex_reg_value_1 <= 32'b0;
+                id_ex_reg_value_2 <= 32'b0;
+                id_ex_immediate <= 32'b0;
+                id_ex_rd <= 5'b0;
+                id_ex_funct3 <= 3'b0;
+                second_flush <= 1'b0;
+                id_ex_reg_write <= 1'b0;
+                id_ex_read_mem <= 1'b0;
+                id_ex_write_mem <= 1'b0;
+                id_ex_reg_or_imm <= 1'b0;
+                id_ex_alu_op <= 4'b0;
+                id_ex_write_back_src <= 2'b0;
+                id_ex_branch <= 1'b0;
+                id_ex_jump <= 1'b0;
+                id_ex_current_pc <= 32'b0;
+                id_ex_current_pc_plus_4 <= 32'b0;
+            
+            
+            end else if (~stall) begin
+                 
+                id_ex_rs1 <= id_rs1;
+                id_ex_rs2 <= id_rs2;            
+                id_ex_reg_value_1 <= id_reg_value_1;
+                id_ex_reg_value_2 <= id_reg_value_2;
+                id_ex_immediate <= id_immediate;
+                id_ex_rd <= id_rd;
+                id_ex_funct3 <= id_funct3;
                 
-            //Boundary 1: ID->EX 
-            id_ex_rs1 <= id_rs1;
-            id_ex_rs2 <= id_rs2;            
-            id_ex_reg_value_1 <= id_reg_value_1;
-            id_ex_reg_value_2 <= id_reg_value_2;
-            id_ex_immediate <= id_immediate;
-            id_ex_rd <= id_rd;
-            id_ex_funct3 <= id_funct3;
+                //Branch/jump 2-cycle flush
+                second_flush <= ex_if_use_target; 
+                id_ex_reg_write <= (ex_if_use_target | second_flush)? 1'b0 : id_reg_write;
+                id_ex_read_mem  <= (ex_if_use_target | second_flush)? 1'b0 : id_read_mem;
+                id_ex_write_mem <= (ex_if_use_target | second_flush)? 1'b0 : id_write_mem;
+                
+                      
+                id_ex_reg_or_imm <= id_reg_or_imm;
+                id_ex_alu_op <= id_alu_op;
+                id_ex_write_back_src <= id_write_back_src;
+                
+                //A flushed instruction can still set use_target (redirecting a PC address that we NOT want)
+                //so we set the same branch/jump 2-cycle flush logic too
+                id_ex_branch <= (ex_if_use_target | second_flush)? 1'b0 : id_branch;
+                id_ex_jump   <= (ex_if_use_target | second_flush)? 1'b0 : id_jump;
+                
+                
+                id_ex_current_pc <= id_current_pc;
+                id_ex_current_pc_plus_4 <= id_current_pc_plus_4;
+                
+    
+    
+            end
             
-            //Branch/jump 2-cycle flush
-            second_flush <= ex_if_use_target; 
-            id_ex_reg_write <= (ex_if_use_target | second_flush)? 1'b0 : id_reg_write;
-            id_ex_write_mem <= (ex_if_use_target | second_flush)? 1'b0 : id_write_mem;
-            
-                  
-            id_ex_reg_or_imm <= id_reg_or_imm;
-            id_ex_alu_op <= id_alu_op;
-            id_ex_write_back_src <= id_write_back_src;
-            
-            //A flushed instruction can still set use_target (redirecting a PC address that we NOT want)
-            //so we set the same branch/jump 2-cycle flush logic too
-            id_ex_branch <= (ex_if_use_target | second_flush)? 1'b0 : id_branch;
-            id_ex_jump   <= (ex_if_use_target | second_flush)? 1'b0 : id_jump;
-            
-            
-            id_ex_current_pc <= id_current_pc;
-            id_ex_current_pc_plus_4 <= id_current_pc_plus_4;
-            
-            //Boundary 2: EX->WB
-            ex_wb_reg_write <= ex_reg_write;
-            ex_wb_rd <= ex_rd;
-            ex_wb_write_back_src <= ex_write_back_src;
-            ex_wb_alu_result <= ex_alu_result;
-            ex_wb_current_pc_plus_4 <= ex_current_pc_plus_4;         
-
         end
+    
+    
+        //Boundary 2: EX->WB
+        always_ff @(posedge clk) begin
         
-    end
+            //reset to avoid X's in simulation
+            if (reset) begin
+    
+                ex_wb_reg_write <= 1'b0;
+                ex_wb_rd <= 5'b0;
+                ex_wb_write_back_src <= 2'b0;
+                ex_wb_alu_result <= 32'b0;
+                ex_wb_current_pc_plus_4 <= 32'b0;
+                ex_wb_is_uart <= 1'b0;
+            
+            
+            end else begin
+    
+                ex_wb_reg_write <= stall? 1'b0 : ex_reg_write;
+                ex_wb_rd <= ex_rd;
+                ex_wb_write_back_src <= ex_write_back_src;
+                ex_wb_alu_result <= ex_alu_result;
+                ex_wb_current_pc_plus_4 <= ex_current_pc_plus_4;
+                ex_wb_is_uart <= ex_is_uart;         
+    
+            end
+            
+        end
     
 
     //4-stage instantiations    
@@ -198,6 +274,7 @@ module rv32i_top #(
             
             .use_target(ex_if_use_target),
             .pc_target(ex_if_pc_target),
+            .stall(stall),
             
             //outputs
             .out_instruction(if_instruction),
@@ -270,11 +347,13 @@ module rv32i_top #(
             .out_reg_write(ex_reg_write),
             .out_rd(ex_rd),  
             .out_write_back_src(ex_write_back_src),
+            .out_forwarded_rs2(ex_forwarded_rs2),
             .out_use_target(ex_if_use_target),
             .out_pc_target(ex_if_pc_target),
             .out_alu_result(ex_alu_result),
             .out_d_mem_read_data(ex_d_mem_read_data),
-            .out_current_pc_plus_4(ex_current_pc_plus_4)           
+            .out_current_pc_plus_4(ex_current_pc_plus_4),
+            .out_is_uart(ex_is_uart)           
     
         );    
 
@@ -286,7 +365,7 @@ module rv32i_top #(
             .rd(ex_wb_rd),
             .write_back_src(ex_wb_write_back_src),
             .alu_result(ex_wb_alu_result),
-            .d_mem_read_data(ex_d_mem_read_data),
+            .d_mem_read_data(final_read_data),
             .current_pc_plus_4(ex_wb_current_pc_plus_4),
             
             //outputs
@@ -309,6 +388,75 @@ module rv32i_top #(
             .forward_rs1(forward_rs1),
             .forward_rs2(forward_rs2)
             
+        );
+        
+        
+        axi4lite_master master_inst (
+        
+            .clk(clk),
+            .reset(reset),
+            
+            .uart_start(ex_is_uart && (id_ex_read_mem | id_ex_write_mem)),          
+            .sel_write_read(id_ex_write_mem),      
+            .cpu_addr(ex_alu_result[3:0]),
+            .cpu_write_data(ex_forwarded_rs2),      
+            .cpu_read_data(cpu_read_data),
+            .read_done(read_done),
+            
+             .AWADDR(AWADDR),    
+            .AWVALID(AWVALID),  
+            .AWREADY(AWREADY),
+            
+            .WDATA(WDATA),
+            .WVALID(WVALID),
+            .WREADY(WREADY),
+            
+            .BRESP(BRESP),
+            .BVALID(BVALID),
+            .BREADY(BREADY),
+        
+            .ARADDR(ARADDR),    
+            .ARVALID(ARVALID),  
+            .ARREADY(ARREADY),        
+        
+            .RDATA(RDATA),        
+            .RRESP(RRESP),
+            .RVALID(RVALID),
+            .RREADY(RREADY) 
+            
+        );
+        
+        
+        
+        
+        axi4lite_wrapper_uart slave_inst (
+        
+            .clk(clk),
+            .reset(reset),
+                    
+            .AWADDR(AWADDR),    
+            .AWVALID(AWVALID),  
+            .AWREADY(AWREADY),
+            
+            .WDATA(WDATA),
+            .WVALID(WVALID),
+            .WREADY(WREADY),
+            
+            .BRESP(BRESP),
+            .BVALID(BVALID),
+            .BREADY(BREADY),
+        
+            .ARADDR(ARADDR),    
+            .ARVALID(ARVALID),  
+            .ARREADY(ARREADY),        
+        
+            .RDATA(RDATA),        
+            .RRESP(RRESP),
+            .RVALID(RVALID),
+            .RREADY(RREADY),
+             
+            .rx(rx),
+            .tx(tx)
         );        
         
         

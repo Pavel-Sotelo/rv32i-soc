@@ -42,46 +42,65 @@ module ex_stage(
         output logic  [4:0] out_rd,  
         output logic  [1:0] out_write_back_src,
         
+        //Output forwarded rs2 to feed write_data to AXI4-Lite UART
+        output logic [31:0] out_forwarded_rs2,
+        
         output logic out_use_target,
         output logic [31:0] out_pc_target,
         
         output logic [31:0] out_alu_result,
         output logic [31:0] out_d_mem_read_data,
-        //EX is where current_pc gets worked (PC + immediate for branch and jump targets) so it doesn't need to get outputted again
-        output logic [31:0] out_current_pc_plus_4           
+        //EX is where current_pc gets worked (PC + immediate for branch and jump targets),
+        //so it doesn't need to get outputted again.
+        output logic [31:0] out_current_pc_plus_4,
+        
+        
+    //UART flag address
+            
+        output logic out_is_uart           
 
     );
     
-    
-    
+
     //Drive general outputs to wb
-    assign out_reg_write = reg_write;
-    assign out_rd = rd;
-    assign out_write_back_src = write_back_src;
-    assign out_current_pc_plus_4 = current_pc_plus_4;
+    
+        assign out_reg_write = reg_write;
+        assign out_rd = rd;
+        assign out_write_back_src = write_back_src;
+        assign out_current_pc_plus_4 = current_pc_plus_4;
+    
     
     //forward_value is wb_write_value, already muxed by write_back_src, so it is
     //correct for ALU results, loads (data_memory) and JAL return addresses
-    logic [31:0] forwarded_rs2;
-    assign forwarded_rs2 = forward_rs2 ? forward_value : reg_value_2; 
+        
+        assign out_forwarded_rs2 = forward_rs2 ? forward_value : reg_value_2; 
+    
     
     //ALU operands logic
-    logic [31:0] alu_first_operand;
-    logic [31:0] alu_second_operand;
     
-    assign alu_first_operand = forward_rs1 ? forward_value : reg_value_1;
-    //forwarding applies only when the operand is a register, so reg_or_imm selects first
-    assign alu_second_operand = reg_or_imm? forwarded_rs2 : immediate;
+        logic [31:0] alu_first_operand;
+        logic [31:0] alu_second_operand;
+        
+        assign alu_first_operand = forward_rs1 ? forward_value : reg_value_1;
+        //forwarding applies only when the operand is a register, so reg_or_imm selects first
+        assign alu_second_operand = reg_or_imm? out_forwarded_rs2 : immediate;
     
     
     //Branch/jump logic
-    logic take_branch;
     
-    //Branch/jump flag (driven by branch_unit(take_branch) or jump)
-    assign out_use_target = take_branch | jump;
+        logic take_branch;
+        
+        //Branch/jump flag, driven by branch_unit(take_branch) or jump
+        assign out_use_target = take_branch | jump;
+        
+        //branch/jump adder (ALU already performs SUB on branch, so we need another adder for PC + imm)
+        assign out_pc_target  = current_pc + immediate;
     
-    //branch/jump adder (ALU already performs SUB on branch, so we need another adder for PC + imm)
-    assign out_pc_target  = current_pc + immediate;
+    
+    //UART address flag signal
+    
+        assign out_is_uart = out_alu_result[12];
+    
 
 
     //Instantiations:
@@ -112,8 +131,8 @@ module ex_stage(
     
         .clk(clk),
         .addr(out_alu_result),
-        .write_enable(write_mem),
-        .write_data(forwarded_rs2),
+        .write_enable(write_mem & (~out_is_uart)),
+        .write_data(out_forwarded_rs2),
         .read_data(out_d_mem_read_data)
     
     );
