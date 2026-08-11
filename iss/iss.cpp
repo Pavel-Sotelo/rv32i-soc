@@ -27,6 +27,7 @@ void load_program_add_5_3(CPUState *cpu);
 void load_program_6_instr(CPUState *cpu);
 void load_program_first_loop(CPUState *cpu);
 void load_program_forwarding(CPUState *cpu);
+void load_program_fibonacci(CPUState *cpu);
 
 uint32_t fetch(CPUState *cpu);
 uint32_t decode_opcode(uint32_t instruction);
@@ -60,11 +61,12 @@ int main ()
     int instruction_count = 0;
     CPUState cpu_state = {0};
     DecodeInstruction decode_instruction = {0};
+    bool halted = false;
     
 
     //load the program (hex instructions)
 
-    load_program_forwarding(&cpu_state);
+    load_program_fibonacci(&cpu_state);
 
     for(uint32_t i = 0; i < cpu_state.program_size; i++)
     {
@@ -74,7 +76,7 @@ int main ()
 
     //PC Cycle
     cpu_state.pc = 0;
-    while(cpu_state.pc < cpu_state.program_size * 4)
+    while(cpu_state.pc < (cpu_state.program_size * 4) && (!halted))
     {
 
         //capture current pc before incrementing it (for branch/jump instructions)
@@ -194,6 +196,11 @@ int main ()
                     printf("branch not taken: x%d = %u, x%d = %u - PC = %u\n",
                         decode_instruction.rs1, cpu_state.regs[decode_instruction.rs1], decode_instruction.rs2, cpu_state.regs[decode_instruction.rs2], cpu_state.pc);
                 }
+                else if (cpu_state.pc == decode_instruction.current_pc)
+                {
+                    printf("program halted at PC = %u\n", cpu_state.pc);
+                    halted = true;
+                }
                 else
                 {
                     printf("branch taken: x%d = %u, x%d = %u - PC = %u\n", decode_instruction.rs1, cpu_state.regs[decode_instruction.rs1], decode_instruction.rs2, cpu_state.regs[decode_instruction.rs2], cpu_state.pc);
@@ -240,7 +247,7 @@ int main ()
                 printf("x%d = %u\n", i, cpu_state.regs[i]);
 
         //Set txt file printing each final register 32-bit number (co-simulation)        
-        FILE *f = fopen("iss_regs_forwarding.txt", "w");
+        FILE *f = fopen("iss_regs_fibonacci.txt", "w");
         for (int i = 0; i < 32; i++)
             fprintf(f, "x%d = %08x\n", i, cpu_state.regs[i]);
         fclose(f);                
@@ -330,6 +337,29 @@ return 0;
         //store the number of instructions
         cpu->program_size = 8;
     }
+
+    //load first program_fibonacci to the instruction memory
+    void load_program_fibonacci(CPUState *cpu)
+    {
+
+        cpu->imem[0] = 0x00000113;     
+        cpu->imem[1] = 0x00c00193;
+        cpu->imem[2] = 0x00000213;
+        cpu->imem[3] = 0x00100293;    
+        cpu->imem[4] = 0x00520333;
+        cpu->imem[5] = 0x00500233;
+        cpu->imem[6] = 0x006002b3;
+        cpu->imem[7] = 0x00110113;
+        cpu->imem[8] = 0xfe3118e3;
+        cpu->imem[9] = 0x00001537;
+        cpu->imem[10] = 0x00552023;
+        cpu->imem[11] = 0x00000063;
+
+        
+        //store the number of instructions
+        cpu->program_size = 12;
+    }
+
 
 
 
