@@ -14,6 +14,8 @@ module axi4lite_master #(
         input logic [ADDR_WIDTH - 1:0] cpu_addr,
         input logic [31:0] cpu_write_data,
         output logic [31:0] cpu_read_data,
+        //output signal that raises when READ is done (for lw stall)
+        output logic read_done,
         
     
         //WRITE ADDRESS CHANNEL (AW)
@@ -110,12 +112,18 @@ module axi4lite_master #(
         //Capture RDATA in READ_RESP next_state transition
         always_ff @(posedge clk) begin
         
-            if(reset) 
-                cpu_read_data <= '0;    
+            if(reset) begin
+                cpu_read_data <= '0;
+                read_done <= 0;    
                         
-            else if(state == READ_RESP && RVALID)
+            end else if(state == READ_RESP && RVALID) begin
                 cpu_read_data <= RDATA;
-    
+                read_done <= 1;
+                
+            end else begin
+                read_done <= 0;
+                
+            end
         end      
     
 
