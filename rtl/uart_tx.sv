@@ -13,10 +13,10 @@ module uart_tx(
 
     localparam IDLE = 0, START = 1, DATA = 2, STOP = 3;
 
-    //FULL_CYCLE is the last count of a 868-cycle bit period (0 to 867)
+    //FULL_CYCLE is the last count of a full cycle bit period 
     //LAST_BIT is index of the final data bit
 
-    localparam FULL_CYCLE = 10'd867;
+    localparam FULL_CYCLE = 10'd650;
     localparam LAST_BIT   = 4'd7;
 
     reg [1:0] state, next_state;

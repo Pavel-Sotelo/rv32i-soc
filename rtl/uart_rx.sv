@@ -11,12 +11,12 @@ module uart_rx(
 );
     parameter IDLE = 0, DATA = 1, DONE = 2, ERROR = 3;
 
-    //FULL_CYCLE is the last count of a 868-cycle bit period (0 to 867)
+    //FULL_CYCLE is the last count of a full cycle bit period
     //HALF_CYCLE is the midpoint of the bit period, where rx gets sampled
     //LAST_BIT is the index past the final data bit, marks end of DATA state
 
-    localparam FULL_CYCLE = 10'd867;
-    localparam HALF_CYCLE = 10'd433;
+    localparam FULL_CYCLE = 10'd650;
+    localparam HALF_CYCLE = 10'd325;
     localparam LAST_BIT   = 4'd8;
 
     reg [3:0] d_counter;
