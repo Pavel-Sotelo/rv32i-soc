@@ -2,7 +2,7 @@
 
 module rv32i_top #(
     
-    parameter string PROGRAM = "program_forwarding.hex"
+    parameter string PROGRAM = "program_fibonacci.hex"
     
     )(
 
@@ -17,7 +17,29 @@ module rv32i_top #(
     input  logic rx,
     output logic tx
     
-    ); 
+    );
+    
+////////////////////////////////////////////////////////////////////    
+    
+    //clock generation: 100 MHz board clock to 75 MHz MMCM clock  
+
+    logic clk_75;
+    logic locked;
+
+    clk_wiz_0 clk_gen (
+    
+        .clk_in1 (clk),      //100 MHz from the W5 crystal
+        .clk_out1(clk_75),   //75 MHz to the whole design
+        .reset   (reset),    //resets the MMCM itself
+        .locked  (locked)    //high once 75 MHz is stable
+        
+    );
+
+    logic sys_reset;
+    assign sys_reset = reset | ~locked;
+    
+///////////////////////////////////////////////////////////////////
+
 
     //CPU 4-stage internal output signals:
 
@@ -139,9 +161,11 @@ module rv32i_top #(
         logic RVALID;
         logic RREADY;  
 
-////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////
+
 
 //CPU Logic:
+
 
         //Signal to do the 2nd cycle-flush of a branch/jump instruction
         logic second_flush;
@@ -170,10 +194,10 @@ module rv32i_top #(
     //Pipeline output register boundary's:
     
         //Boundary 1: ID->EX
-        always_ff @(posedge clk) begin
+        always_ff @(posedge clk_75) begin
         
             //reset to avoid X's in simulation
-            if (reset) begin
+            if (sys_reset) begin
             
                 id_ex_rs1 <= 5'b0;
                 id_ex_rs2 <= 5'b0;        
@@ -233,10 +257,10 @@ module rv32i_top #(
     
     
         //Boundary 2: EX->WB
-        always_ff @(posedge clk) begin
+        always_ff @(posedge clk_75) begin
         
             //reset to avoid X's in simulation
-            if (reset) begin
+            if (sys_reset) begin
     
                 ex_wb_reg_write <= 1'b0;
                 ex_wb_rd <= 5'b0;
@@ -259,6 +283,8 @@ module rv32i_top #(
             
         end
     
+////////////////////////////////////////////////////////////////
+
 
     //4-stage instantiations    
     
@@ -269,8 +295,8 @@ module rv32i_top #(
         ) if_inst (
         
             //inputs
-            .clk(clk),
-            .reset(reset),
+            .clk(clk_75),
+            .reset(sys_reset),
             
             .use_target(ex_if_use_target),
             .pc_target(ex_if_pc_target),
@@ -288,8 +314,8 @@ module rv32i_top #(
         id_stage id_inst (
     
             //inputs
-            .clk(clk),
-            .reset(reset),
+            .clk(clk_75),
+            .reset(sys_reset),
             
             .instruction(if_instruction),
             .current_pc(if_current_pc),
@@ -323,7 +349,7 @@ module rv32i_top #(
             ex_stage ex_inst (
     
             //inputs
-            .clk(clk),
+            .clk(clk_75),
     
             .forward_rs1(forward_rs1),
             .forward_rs2(forward_rs2),
@@ -393,8 +419,8 @@ module rv32i_top #(
         
         axi4lite_master master_inst (
         
-            .clk(clk),
-            .reset(reset),
+            .clk(clk_75),
+            .reset(sys_reset),
             
             .uart_start(ex_is_uart && (id_ex_read_mem | id_ex_write_mem)),          
             .sel_write_read(id_ex_write_mem),      
@@ -431,8 +457,8 @@ module rv32i_top #(
         
         axi4lite_wrapper_uart slave_inst (
         
-            .clk(clk),
-            .reset(reset),
+            .clk(clk_75),
+            .reset(sys_reset),
                     
             .AWADDR(AWADDR),    
             .AWVALID(AWVALID),  
