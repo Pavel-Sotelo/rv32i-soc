@@ -2,33 +2,146 @@
 
 A RISC-V RV32I system-on-chip built from scratch on a Basys 3 FPGA (Xilinx Artix-7).
 
-A custom RV32I CPU connected over an AXI4-Lite interconnect to a UART bring-up
-interface, verified by running the same programs on both the RTL and a C
-instruction set simulator (ISS) written from scratch, and comparing the final
-register and memory state.
+A custom RV32I CPU connected over an AXI4-Lite interconnect to a UART peripheral,
+verified by running the same programs on both the RTL and a C instruction set
+simulator (ISS) written from scratch, and comparing the final register and memory
+state.
 
-**Status: in progress** — CPU runs on the Basys 3 at 100 MHz with full data-hazard forwarding, verified by co-simulation. AXI4-Lite integration next.
+**Status — the SoC is working, in RTL and on hardware.** After building the CPU,
+the AXI4-Lite interconnect and the UART separately and verifying each, they now run
+as one system: the first SoC-level program computes Fibonacci on the CPU, sends the
+result across the AXI4-Lite bus to the UART, and transmits it to a PC terminal —
+processor, interconnect and peripheral working together on the physical Basys 3 at
+75 MHz. This is the "I built a SoC" milestone.
+
+*Why 75 MHz:* the CPU alone closes timing at the board's 100 MHz, but the full SoC
+integration does not — the added AXI and stall logic push the critical path past
+10 ns. Rather than run at a failing 100 MHz or a conservative 50, the core clock is
+generated at 75 MHz by an on-chip MMCM, closing with +0.739 ns of margin. Details in
+[Design decisions](#design-decisions-for-the-hardware-soc).
+
+*Next:* a more robust program that exercises all three of the UART's memory-mapped
+AXI registers — a string-sender that writes bytes to TX_DATA and polls the STATUS
+register between them so the transmitter is never overwritten mid-byte, printing
+readable text to the terminal. Fibonacci stays as the co-simulation proof; the
+string-sender becomes the full-peripheral hardware showcase.
+
+![Fibonacci result in the terminal](docs/images/putty_fibonacci.png)
+*`F(12) = 233 = 0xE9` received over the UART, rendered as é in Latin-1. Each
+character is one reset — the program computes Fibonacci and transmits the result
+once per run.*
+
+![SoC running on the Basys 3](docs/images/basys3_soc_fibonacci.jpeg)
+*The board running Fibonacci. The LEDs show the most recent write-back value, so
+each term (1, 2, … 233) appears for one cycle — too fast to see at 75 MHz. The
+last register write is `lui x10, 0x1` = 0x1000 (the UART base); the store and
+halting branch after it write nothing, so the program freezes there. The single
+lit LED, bit 12, confirms the CPU reached the instruction just before the
+transmitting store.*
+
+This is a minimal SoC: one CPU (master), one peripheral (UART slave), one AXI4-Lite
+interconnect, one clock domain, on-chip memory. It is educational in scale, not
+commercial — but the defining property of a system-on-chip is there: the processor
+talks to the peripheral over a real, standard bus interconnect, not ad-hoc wires.
 
 ## Progress
 - [x] ALU — RV32I integer ops (ADD, SUB, AND, OR, XOR, SLL, SRL, SRA, SLT, SLTU), 9-case testbench
 - [x] Register file (32×32, 2 read / 1 write, x0 hardwired)
 - [x] Instruction memory (ROM, `$readmemh` program load)
-- [x] ISS skeleton (C reference model) — CPUState, fetch/decode/execute, R-type + I-type arithmetic
+- [x] ISS (C reference model) — full fetch/decode/execute, all implemented instructions, halt detection
 - [x] IF stage — PC register, fetch logic, branch/jump target mux
 - [x] ID stage — control unit, immediate generator (all 6 formats), register file read
-- [x] ISS — loads (LW), stores (SW), LUI, store-load round-trip
 - [x] Data memory (BRAM, synchronous read, byte→word addressing)
 - [x] EX + WB stage modules (ALU path, memory path, write-back mux)
 - [x] First working CPU — top module, straight-line program executing
 - [x] Python assembler — all six RV32I formats, `.s` source → `.hex` output
 - [x] Branch resolution (BEQ, BNE) — EX → IF redirect, 2-cycle flush, counted loop running
-- [x] ISS — branches (BEQ, BNE), jumps (JAL)
-- [x] Co-simulation (RTL vs ISS) — final register state compared automatically
+- [x] ISS — branches (BEQ, BNE), jumps (JAL), loads/stores/LUI
+- [x] Co-simulation (RTL vs ISS) — final register state compared automatically per program
 - [x] Forwarding — 1-back via forwarding unit, 2-back via register file bypass, no stall
 - [x] CPU running on the physical Basys 3
-- [x] Timing closure and Fmax — 100 MHz operating point, 150.6 MHz measured
-- [ ] AXI4-Lite integration (CPU ↔ UART)
-- [ ] Fibonacci and factorial running on hardware, output over UART
+- [x] Timing closure and Fmax — CPU-only 100 MHz operating point, 150.8 MHz measured
+- [x] AXI4-Lite slave (UART wrapper) — three memory-mapped registers, SLVERR, overrun, SVA protocol checkers
+- [x] AXI4-Lite master (CPU side) — single outstanding transaction, stall on UART read
+- [x] SoC integration — CPU ↔ AXI4-Lite ↔ UART, address decode, load stalls on peripheral read
+- [x] Fibonacci in co-simulation — RTL and ISS agree, F(12) = 233
+- [x] MMCM clock generation — 100 MHz board clock → 75 MHz core, reset gated on lock
+- [x] **Fibonacci running on hardware — result transmitted over UART to a terminal**
+- [ ] String-sender demo — multiple bytes with STATUS polling (readable text in the terminal)
+- [ ] CPI measured on Fibonacci; SoC Fmax re-measured via stress test
+- [ ] Python regression script — every testbench, PASS/FAIL summary
+- [ ] SoC block diagram, ISA table, register map for the final README
+
+## Structure
+- `rtl/` — SystemVerilog source
+- `tb/` — testbenches
+- `iss/` — C instruction-set simulator (golden reference model)
+- `tools/` — Python assembler
+- `programs/` — assembly source and generated hex, one folder per program
+- `cosim/` — register dumps from the RTL and the ISS, compared per program
+- `constraints/` — Basys 3 pin and clock constraints
+- `docs/` — design notes and bug logs, folder with readme images
+
+## Target
+Xilinx Artix-7 (Basys 3), Vivado.
+
+## What is done, and what is next
+
+**Done.** The four goals the project was built around are complete and on hardware:
+a real bus integration (AXI4-Lite, CPU to UART), co-simulation against a
+from-scratch C ISS, a measured timing / Fmax story with the critical path
+identified, and a verification-first method — self-checking testbenches, SVA
+protocol checkers on the AXI slave, corner cases written before the testbench, and
+per-module bug logs.
+
+**Next, in order.** These are refinements and demos on top of a working SoC, not
+missing pieces of it:
+
+- **String-sender demo.** Fibonacci sends one byte; a richer program sends several,
+  polling the UART's STATUS register between characters so the transmitter is never
+  overwritten mid-byte. This exercises the whole SoC — repeated stores across the
+  bus, STATUS reads back across it, the stall — and prints readable text. Fibonacci
+  stays as the co-simulation proof (it has a hand-checkable answer); the
+  string-sender becomes the hardware showcase.
+- **Measurements.** CPI on Fibonacci (the 2-cycle branch penalty becomes a number),
+  and the SoC's Fmax re-measured with the same stress-test bisection used on the
+  CPU alone — the integrated design's critical path is slower, and quantifying that
+  gap is the point.
+- **Automation and docs.** A Python regression runner over every testbench, plus a
+  SoC block diagram, ISA table and register map for the final README.
+
+**Deferred to v2 (deliberately, not forgotten).** Runtime program loading over UART
+(turns the instruction ROM into a writable BRAM), an asynchronous FIFO with Gray-code
+pointers to cross clock domains (the natural sequel to the single-clock v1), the
+remaining RV32I instructions, and a 5-stage upgrade with a branch predictor.
+
+## Design decisions for the hardware SoC
+
+Bringing the SoC to hardware forced a few choices, each made from the timing
+report rather than a preference.
+
+**75 MHz core clock via an MMCM.** The CPU alone closes at 100 MHz, but the full
+SoC does not — with the AXI master, UART slave and stall logic added, the critical
+path (data-memory read → PC redirect) misses 100 MHz by 0.838 ns. The Basys 3's
+only clock is a fixed 100 MHz crystal, so a slower core clock is generated on-chip
+by an MMCM (a PLL on dedicated clock routing, not a flip-flop divider). 75 MHz was
+chosen from the report: the path needs ~10.85 ns, 75 MHz gives 13.33 ns, and the
+build closes at +0.739 ns — the highest round frequency with real margin. Reset is
+gated on the MMCM's `locked` output (`sys_reset = reset | ~locked`), holding the
+CPU until the clock is stable. The IP is not committed; regenerate via IP Catalog →
+Clocking Wizard (100 MHz in, 75 MHz out).
+
+**Fibonacci as the first hardware program.** It was already the co-simulation proof
+— a counted loop with a hand-checkable answer, matching on RTL and ISS. Running the
+same known-correct program on hardware means any wrong byte is a clock, baud or pin
+fault, not a program bug. F(12) = 233 is also the largest term that fits in a byte,
+so the whole result transmits in one UART frame.
+
+**Baud divider follows the clock.** The UART times each bit by counting core-clock
+cycles, so the divider tracks the clock, not just the baud. At 75 MHz a
+115200-baud bit is 651 cycles (0.006% error), down from 868 at 100 MHz. This is the
+one constant that must move with the clock — a mismatch sends the right byte at the
+wrong rate and the terminal shows garbage.
 
 ## Scope for v1.0
 
@@ -174,11 +287,18 @@ spacers, covering every forwarding path, matching the reference model exactly.
 
 ## Timing and Fmax
 
+> **Note.** The numbers in this section characterise the **CPU alone**, before AXI
+> and the UART were integrated. They remain the reference for the core's timing
+> story and its measured ceiling. The full SoC is larger and its critical path is
+> slower — it runs at 75 MHz on the board (see
+> [Design decisions](#design-decisions-for-the-hardware-soc)), and its Fmax will be
+> re-measured with the same stress-test method. This section is kept as the
+> CPU-only baseline.
+
 Two builds are reported here, and they answer different questions. The 100 MHz
-build *is* the CPU — it is the bitstream on the board, and the Basys 3's crystal
-is the only clock available. The tighter builds are experiments: they could never
-run, since there is no 150 MHz clock without a PLL, but they are how the ceiling
-gets measured.
+build is the CPU alone, closing at the Basys 3's crystal frequency. The tighter
+builds are experiments: they could never run, since there is no 150 MHz clock
+without a PLL, but they are how the ceiling gets measured.
 
 ### Operating point
 
@@ -315,16 +435,3 @@ continuously — the instruction memory holds 256 words, so after the last
 instruction the program counter runs through zeroed entries, wraps, and starts
 again, roughly 390,000 laps a second at 100 MHz. Only the low bits light, which
 is what the program's results predict.*
-
-## Structure
-- `rtl/` — SystemVerilog source
-- `tb/` — testbenches
-- `iss/` — C instruction-set simulator (golden reference model)
-- `tools/` — Python assembler
-- `programs/` — assembly source and generated hex, one folder per program
-- `cosim/` — register dumps from the RTL and the ISS, compared per program
-- `constraints/` — Basys 3 pin and clock constraints
-- `docs/` — design notes and bug logs, folder with readme images
-
-## Target
-Xilinx Artix-7 (Basys 3), Vivado.
