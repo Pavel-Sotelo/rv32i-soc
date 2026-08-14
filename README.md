@@ -364,57 +364,58 @@ How much harder the tool works is visible in the endpoint count: 704 at 10 ns
 against 1964 at 6.631 ns. Under pressure it replicates registers and splits logic
 that it was content to share when the constraint was loose.
 
-### Resource utilisation
+## Why each memory synthesises differently
 
-| resource | used | available | % |
+Three arrays, three results — a useful illustration of how the tool decides, and of
+when to overrule it.
+
+| array | changes at runtime? | read | result |
 |---|---|---|---|
-| LUT | 448 | 20800 | 2.2 |
-| FF | 396 | 41600 | 1.0 |
-| BRAM | 0.5 | 50 | 1.0 |
-| IO | 18 | 106 | 17.0 |
-
-The data memory occupies half of one block RAM tile; everything else is a couple
-of percent of the device. Pins are the tightest resource at 17%, and the UART will
-add two more.
-
-### Why only one memory became a block RAM
-
-This design has three arrays and they synthesise three different ways, which is a
-useful illustration of how the tool decides.
-
-| array | contents change at runtime? | read | result |
-|---|---|---|---|
-| instruction memory | no | synchronous | constants folded into logic |
+| instruction memory | no | synchronous | block RAM (forced, see below) |
 | data memory | yes | synchronous | block RAM (RAMB18E1) |
-| register file | yes | **combinational** | flip-flops / distributed RAM |
+| register file | yes | combinational | flip-flops |
 
-Two questions decide it, in order.
+Two questions decide it. **Does it need storage at all?** The data memory and register
+file do. The instruction memory does not: `$readmemh` loads it at synthesis time and
+there is no write port, so all 256 entries are compile-time constants and Vivado folds
+them into logic. **What kind of storage?** Block RAM cannot read without a clock. The
+data memory reads synchronously so it qualifies; the register file reads combinationally
+— decode needs both operands the same cycle — so it becomes flip-flops.
 
-**First: does it need real storage at all?** The instruction memory does not.
-`$readmemh` loads the program at synthesis time and there is no write port, so
-every one of its 256 entries is a compile-time constant. At that point it is not
-a memory — it is a fixed lookup table, and Vivado folds it into 90 LUTs. For a
-table where most entries are zero, that is far cheaper than spending a block RAM
-tile. The other two arrays do change while the CPU runs, so they need storage.
+So a write port alone is not enough, and a synchronous read alone is not enough. Both
+must hold — unless the choice is forced.
 
-**Second: what kind of storage?** Block RAM physically cannot read without a
-clock; the read is registered inside the primitive. The data memory reads
-synchronously, so it qualifies, and it becomes a RAMB18E1 occupying half a tile.
-The register file cannot: decode needs both operands in the same cycle it reads
-them, so its read is combinational, and a block RAM would deliver them a cycle
-late. It becomes flip-flops instead.
+### The instruction ROM is forced into block RAM on purpose
 
-So "it has a write port" is not enough to get a block RAM, and "the read is
-synchronous" is not enough either. Both have to hold.
+With the ROM in logic, the instructions *are* the netlist, so every program synthesises
+a different design. At 75 MHz:
 
-**This does not affect the four-stage argument.** The instruction memory's output
-register is written explicitly in the RTL — `instruction <= memory[addr]` inside
-an `always_ff` — so the flop exists no matter what happens to the array behind it.
-The IF→ID pipeline boundary exists either way.
+| program | endpoints | WNS |
+|---|---|---|
+| echo | 1123 | +0.139 ns |
+| Fibonacci | 1634 | +0.739 ns |
 
-**Left as it is, deliberately.** A `rom_style = "block"` attribute would force the
-instruction memory into a BRAM and make the wording tidier, but constants in logic
-are faster than a memory lookup, so it would cost frequency for no gain.
+A 0.6 ns spread with no RTL changed — enough to turn a passing build into a failing one,
+and no timing number comparable to any other. This is constant propagation into the
+design, and it is why published core-only Fmax figures externalise memory interfaces to
+avoid it.
+
+A `rom_style = "block"` attribute forces the array into a block RAM. The read was already
+synchronous, so no pipeline change was needed:
+
+| program | endpoints | WNS |
+|---|---|---|
+| echo | 2961 | +0.192 ns |
+| Fibonacci | 2959 | +0.373 ns |
+
+Two endpoints of difference instead of five hundred.
+
+Resource use rises — 938 → ~1200 LUT, 560 → ~1490 FF, 0.5 → 1.0 BRAM tiles — and that is
+the point. It is not the block RAM costing logic; it is the removal of an optimisation
+that was flattering the numbers. With a 10-instruction program in a 256-entry array, the
+tool deleted the 246 dead entries and the logic feeding them. A block RAM is opaque to
+that, so the fetch path is synthesised in full. The figures now describe the processor
+rather than the processor with one program baked into it.
 
 ### On hardware
 
