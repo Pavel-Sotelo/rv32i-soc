@@ -112,3 +112,136 @@ whether the hazard existed. Confirmed by printing `d_mem_read_data`,
 `write_back_src`, `id_ex_rs1` and `ex_wb_rd` in the cycle the dependent
 instruction was in EX: all four were correct, which proved the value was available
 and the problem was mux selection rather than timing.
+
+---
+
+## 2026-08-17 — Branch flush killed one instruction too many, and it took three days
+
+**Module:** `rv32i_top.sv`
+
+**Cause:** The echo program read a byte from the UART and sent it straight back. On
+hardware, typing a character filled the terminal with that character repeating without
+end. Typing a different one switched the stream over to the new character but never
+stopped it. In simulation the same program transmitted the first byte several times over
+and then polled forever, while the UART wrapper sat holding a second received byte that
+the CPU never collected.
+
+**Root cause:** The branch/jump flush cleared the control signals of **two**
+instructions behind a taken branch, but only **one** wrong-path instruction is ever in
+flight.
+
+`ex_stage` drives `out_use_target` and `out_pc_target` combinationally, and `if_stage`
+feeds them straight into the `next_pc` mux:
+
+```systemverilog
+assign next_pc = use_target ? pc_target : current_pc_plus_4;
+```
+
+So on the very cycle the branch sits in EX, the fetch stage is already reading from the
+target. Counting what is in flight at that moment:
+
+| stage | holds | verdict |
+|---|---|---|
+| EX | the branch, redirect asserted this cycle | resolving |
+| ID | instruction fetched after the branch | wrong path, must die |
+| IF | already fetching from `pc_target` | correct path, must live |
+
+One wrong instruction, not two. The flush is applied at the ID→EX boundary, so each
+cycle it is active neuters exactly one instruction crossing into EX. `second_flush`
+extended it for a second cycle — and by then the instruction at that boundary was the
+*first instruction of the branch target*, which is on the correct path.
+
+The two-cycle width is correct for a design where the redirect is registered out of EX.
+Here it is combinational, which buys back a cycle, and the flush width was never
+adjusted to match.
+
+**Why every earlier program still passed.** A flushed instruction is not removed, only
+stripped of `reg_write`, `read_mem`, `write_mem`, `branch` and `jump` — it becomes a
+`nop`. Whether that matters depends entirely on what sits at the branch target:
+
+- **Straight-line program** — no branches, so no flushes at all.
+- **First loop, forwarding, UART stall** — the victim was arithmetic inside a loop body
+  and was re-executed on a later pass, or its effect never reached a register the test
+  compared.
+- **Fibonacci** — the `bne` targets an `add` 16 bytes back. The killed value was
+  recomputed by the loop, and F(12) came out as 233 exactly as the ISS predicted.
+
+Co-simulation compares **final register state**. A defect whose effect is recomputed on
+a later iteration converges to the same answer, so RTL and ISS agreed every time. Four
+programs, all green, for weeks.
+
+The echo program broke the pattern for one reason. `wait_rx` is three instructions:
+
+```
+04: lw   x1, 8(x10)     <- the flush victim
+08: andi x1, x1, 2
+0c: beq  x1, x0, -8     <- taken, redirects to 04
+```
+
+The target is only 8 bytes back, so the extra flush cycle landed on the `lw` at `0x04`
+and cleared its `read_mem` before it reached EX. That load is not arithmetic that can be
+recomputed — it is the AXI4-Lite read that fetches STATUS. With `read_mem` low no bus
+transaction is issued at all, and `x1` keeps whatever the previous read left in it.
+
+The first character was read correctly because at start-up the CPU reached `wait_rx`
+before any branch had been taken, so that first `lw` went through cleanly: STATUS was
+read, the done bit was set, and the byte was echoed. From then on every pass arrived
+through the loop-back branch with the `lw` at `0x04` neutered, so `x1` kept the STATUS
+word from that one good read — done bit still set. `wait_rx` fell through on every pass
+without ever consulting the peripheral again, RX_DATA was re-read, and the byte was sent
+out over and over.
+
+The stream tracked whatever the wrapper happened to be holding, which is why typing a
+different character switched the output to that character instead of stopping it: the RX
+side was working the whole time and kept updating `CAPTURED_RX_BYTE`. Only the CPU's
+view of STATUS was frozen.
+
+**Fix:** flush one instruction, not two. `second_flush` and its logic were deleted and
+the five control signals now gate on `ex_if_use_target` alone:
+
+```systemverilog
+id_ex_reg_write <= ex_if_use_target ? 1'b0 : id_reg_write;
+id_ex_read_mem  <= ex_if_use_target ? 1'b0 : id_read_mem;
+id_ex_write_mem <= ex_if_use_target ? 1'b0 : id_write_mem;
+id_ex_branch    <= ex_if_use_target ? 1'b0 : id_branch;
+id_ex_jump      <= ex_if_use_target ? 1'b0 : id_jump;
+```
+
+The fix is entirely subtraction. Nothing was added.
+
+**How it was caught.** Three days, and almost all of that time was spent looking in the
+wrong module. The symptom pointed at the UART, so the search started there and stayed
+there far too long. What was actually ruled out along the way:
+
+- **The program.** Decoded straight from the hex, instruction by instruction: every
+  opcode, register field and branch offset was correct, including all three backward
+  branch immediates. The software was never at fault.
+- **The wrapper.** A monitor on `CAPTURED_DONE` showed the second byte being captured
+  correctly at 449.4 µs with the right value. The wrapper did its job.
+- **The stall.** `ex_if_use_target` and `stall` were never high in the same cycle, so no
+  redirect was being discarded by the pipeline freeze.
+- **The branch unit.** Replacing the loop-back `beq` with an unconditional `jal` failed
+  in exactly the same way, which cleared the comparison logic and `id_ex_branch`.
+- **The program layout.** Padding the branch shadow with `nop`s changed nothing.
+
+Each of those eliminated a module without identifying the fault, and a dozen speculative
+RTL changes were tried and reverted in between. The thing that actually found it was a
+**PC trace**: printing `if_current_pc`, `ex_is_uart`, `id_ex_read_mem`, `stall` and
+`ex_if_use_target` every cycle for forty cycles, long after the second byte had arrived.
+
+That trace showed the loop running `04 → 08 → 0c → 10 → 14` as expected, and
+`id_ex_read_mem = 0` on **every single line**. A program counter sitting on a `lw` while
+`read_mem` reads zero is a contradiction that only the flush can produce. The fix
+followed in minutes; the two days before it were spent without that one measurement.
+
+**What this says about the verification.** The suite was strong at the module level —
+every module has its own testbench — and strong at final-state comparison through the
+ISS. It was blind to a defect that is invisible in final state, and every program written
+before this one happened to be forgiving in exactly that way. It took a program where a
+flushed instruction was a peripheral read, which cannot be recomputed by a later
+iteration, to make the fault observable at all.
+
+`tb_rv32i_echo` now sends **two** bytes and checks both the number of transmissions and
+the value of each. Counting alone is not enough either: at one point during debugging the
+design transmitted exactly once and carried the wrong byte, which a pulse count would
+have passed.
