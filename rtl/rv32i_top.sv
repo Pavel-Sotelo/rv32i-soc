@@ -2,7 +2,7 @@
 
 module rv32i_top #(
     
-    parameter string PROGRAM = "program_fibonacci.hex"
+    parameter string PROGRAM = "program_echo.hex"
     
     )(
 
@@ -167,10 +167,6 @@ module rv32i_top #(
 //CPU Logic:
 
 
-        //Signal to do the 2nd cycle-flush of a branch/jump instruction
-        logic second_flush;
-        
-        
         //Signals for forwarding unit (1-back data hazard fix)
         logic forward_rs1;
         logic forward_rs2;
@@ -206,7 +202,6 @@ module rv32i_top #(
                 id_ex_immediate <= 32'b0;
                 id_ex_rd <= 5'b0;
                 id_ex_funct3 <= 3'b0;
-                second_flush <= 1'b0;
                 id_ex_reg_write <= 1'b0;
                 id_ex_read_mem <= 1'b0;
                 id_ex_write_mem <= 1'b0;
@@ -229,11 +224,10 @@ module rv32i_top #(
                 id_ex_rd <= id_rd;
                 id_ex_funct3 <= id_funct3;
                 
-                //Branch/jump 2-cycle flush
-                second_flush <= ex_if_use_target; 
-                id_ex_reg_write <= (ex_if_use_target | second_flush)? 1'b0 : id_reg_write;
-                id_ex_read_mem  <= (ex_if_use_target | second_flush)? 1'b0 : id_read_mem;
-                id_ex_write_mem <= (ex_if_use_target | second_flush)? 1'b0 : id_write_mem;
+                //Branch/jump flush
+                id_ex_reg_write <= ex_if_use_target ? 1'b0 : id_reg_write;
+                id_ex_read_mem  <= ex_if_use_target ? 1'b0 : id_read_mem;
+                id_ex_write_mem <= ex_if_use_target ? 1'b0 : id_write_mem;
                 
                       
                 id_ex_reg_or_imm <= id_reg_or_imm;
@@ -241,9 +235,9 @@ module rv32i_top #(
                 id_ex_write_back_src <= id_write_back_src;
                 
                 //A flushed instruction can still set use_target (redirecting a PC address that we NOT want)
-                //so we set the same branch/jump 2-cycle flush logic too
-                id_ex_branch <= (ex_if_use_target | second_flush)? 1'b0 : id_branch;
-                id_ex_jump   <= (ex_if_use_target | second_flush)? 1'b0 : id_jump;
+                //so we set the same branch/jump flush logic too
+                id_ex_branch <= ex_if_use_target ? 1'b0 : id_branch;
+                id_ex_jump   <= ex_if_use_target ? 1'b0 : id_jump;
                 
                 
                 id_ex_current_pc <= id_current_pc;
@@ -422,7 +416,7 @@ module rv32i_top #(
             .clk(clk_75),
             .reset(sys_reset),
             
-            .uart_start(ex_is_uart && (id_ex_read_mem | id_ex_write_mem)),          
+            .uart_start(ex_is_uart && ((id_ex_read_mem & (~read_done)) | id_ex_write_mem)),          
             .sel_write_read(id_ex_write_mem),      
             .cpu_addr(ex_alu_result[3:0]),
             .cpu_write_data(ex_forwarded_rs2),      
