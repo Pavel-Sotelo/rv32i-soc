@@ -2,7 +2,7 @@
 
 module rv32i_top #(
     
-    parameter string PROGRAM = "program_echo.hex"
+    parameter string PROGRAM = "program_command_interpreter.hex"
     
     )(
 
@@ -164,7 +164,7 @@ module rv32i_top #(
 ////////////////////////////////////////////////////////////////////////////
 
 
-//CPU Logic:
+    //CPU Logic:
 
 
         //Signals for forwarding unit (1-back data hazard fix)
@@ -184,8 +184,28 @@ module rv32i_top #(
         
     
         //Assign led output that shows value's being written - only for synthesis purposes
-         assign led = wb_write_value[15:0];
+        assign led = wb_write_value[15:0];
     
+
+        //Flush logic:
+        logic flush;
+        logic flush_delayed;
+        
+        always_ff @(posedge clk_75) begin
+        
+            if (sys_reset)
+                flush_delayed <= 1'b0;
+                
+            else if (~stall)
+                flush_delayed <= ex_if_use_target;
+                
+        end
+  
+        assign flush = ex_if_use_target | flush_delayed;
+
+
+/////////////////////////////////////////////////////////////////////////
+
 
     //Pipeline output register boundary's:
     
@@ -225,9 +245,9 @@ module rv32i_top #(
                 id_ex_funct3 <= id_funct3;
                 
                 //Branch/jump flush
-                id_ex_reg_write <= ex_if_use_target ? 1'b0 : id_reg_write;
-                id_ex_read_mem  <= ex_if_use_target ? 1'b0 : id_read_mem;
-                id_ex_write_mem <= ex_if_use_target ? 1'b0 : id_write_mem;
+                id_ex_reg_write <= flush ? 1'b0 : id_reg_write;
+                id_ex_read_mem  <= flush ? 1'b0 : id_read_mem;
+                id_ex_write_mem <= flush ? 1'b0 : id_write_mem;
                 
                       
                 id_ex_reg_or_imm <= id_reg_or_imm;
@@ -236,8 +256,8 @@ module rv32i_top #(
                 
                 //A flushed instruction can still set use_target (redirecting a PC address that we NOT want)
                 //so we set the same branch/jump flush logic too
-                id_ex_branch <= ex_if_use_target ? 1'b0 : id_branch;
-                id_ex_jump   <= ex_if_use_target ? 1'b0 : id_jump;
+                id_ex_branch <= flush ? 1'b0 : id_branch;
+                id_ex_jump   <= flush ? 1'b0 : id_jump;
                 
                 
                 id_ex_current_pc <= id_current_pc;
