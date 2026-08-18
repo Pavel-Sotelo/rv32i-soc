@@ -245,3 +245,178 @@ iteration, to make the fault observable at all.
 the value of each. Counting alone is not enough either: at one point during debugging the
 design transmitted exactly once and carried the wrong byte, which a pulse count would
 have passed.
+
+
+---
+
+## 2026-08-17 — The instruction memory's output register is a pipeline register, and I was treating it as neither
+
+**Module:** `instruction_memory.sv`, `rv32i_top.sv`
+
+**Cause:** With the program finally loading, the interpreter still failed, in two
+different ways at once. `wait_tx` never exited, so a command either sent nothing or sent
+1683 copies of a byte. And when bytes did come out, the wrong ones did: `c` and `p` both
+answered `'Y'`, which is the reply belonging to `z`.
+
+**Root cause:** one register, unaccounted for, producing two separate bugs.
+
+The instruction memory has a registered output — it has to, because
+`(* rom_style = "block" *)` forces it into a block RAM and a BRAM physically cannot do a
+combinational read:
+
+```systemverilog
+always_ff @(posedge clk) instruction <= inst_memory[addr[9:2]];
+```
+
+That `<=` means there are **two flops in series** between `next_pc` and an instruction
+arriving in decode:
+
+```
+next_pc ──►[PC register]──► current_pc ──►[ROM output register]──► instruction
+              flop 1                             flop 2
+```
+
+I knew this. It is written down in this repo — the README says the IF→ID boundary is
+"provided by the instruction memory output register", and that reasoning is what made me
+call the core 4-stage instead of 3-stage. What I had not done is treat that register the
+way I treat the pipeline registers I wrote myself. **Every pipeline register needs a
+stall enable and a flush.** This one had neither, and each omission produced its own bug.
+
+### Bug A: no stall enable, so instructions were destroyed mid-flight
+
+When a `lw` from the UART stalls the pipeline, freezing means nothing moves. The PC froze
+correctly. The ROM output register kept clocking, because nothing told it not to.
+
+The poison is that the ROM always runs one address *ahead* of the instruction it is
+currently delivering. So during the stall it re-delivered the address it was frozen on
+and overwrote the instruction that was waiting to be decoded:
+
+| cycle | ROM address (frozen) | ROM delivers |
+|---|---|---|
+| 1 | 168 | 164 `andi` — correct |
+| 2 | 168 | 168 `bne` — **the `andi` is gone** |
+| 3 | 168 | 168 `bne` |
+
+The `andi x1, x1, 1` in `wait_tx` was fetched and never executed. It masks STATUS down to
+the `tx_busy` bit; without it `x1` kept the raw STATUS word `6`, `bne x1, x0` saw
+non-zero, and the poll looped forever.
+
+**Fix:** hold the register when the pipeline holds.
+
+```systemverilog
+always_ff @(posedge clk)
+    if (!stall)
+        instruction <= inst_memory[addr[9:2]];
+```
+
+A block RAM with a clock enable, which is still a block RAM — no resource cost.
+
+### Bug B: no flush, so two wrong instructions leaked, not one
+
+This is the one that took the longest, because I had reasoned it out before and reached
+the opposite conclusion — and my reasoning was correct for the design I *thought* I had.
+
+What I believed: `use_target` is combinational out of EX, so on the very cycle the branch
+resolves, `next_pc` already points at the target. One wrong instruction in flight, kill
+one. That is exactly right **if fetch is combinational** — address in, instruction out,
+same cycle.
+
+With two flops in series it takes two clock edges for a redirect to become a new
+instruction. The first edge changes the address. The second changes the data. In between,
+one more wrong instruction gets through:
+
+| cycle | ROM address | instruction in ID |
+|---|---|---|
+| T | B+8 | **B+4** — wrong path |
+| T+1 | target | **B+8** — wrong path |
+| T+2 | target+4 | target — correct, must survive |
+
+So the redirect is right and immediate, as I thought. It is the *instruction* that lags
+by an extra cycle, not the address.
+
+In the dispatch chain that was fatal, because the leaked instruction is itself a branch:
+
+```
+addr 48:  beq x2, x3, do_count    taken, redirect to 116
+addr 52:  beq x2, x3, do_zero     B+4, correctly killed
+addr 56:  ...                     B+8, executed anyway
+```
+
+The instruction at B+8 ran, compared, decided it also matched, and issued its own
+redirect. The CPU reached `do_count`, was pulled straight back out, landed in `do_prev`,
+fell through into `do_zero` and sent `'Y'`. One leaked instruction hijacked the entire
+dispatcher, which is why three unrelated commands all answered with the same wrong byte.
+
+**Why the earlier two-cycle flush did not work.** It also killed for two cycles, but the
+wrong two. It was built on a free-running counter (`second_flush` / `flush_count`) with no
+`~stall` gate, so its window started late and drifted whenever the pipeline froze:
+
+| cycle | in ID | old counter flush | new flush |
+|---|---|---|---|
+| T | B+4 | kill | kill |
+| T+1 | B+8 | missed | kill |
+| T+2 | **target** | **killed — wrong** | survives |
+
+Same count, window shifted by one. Deleting it on 16 August was the right call — a flush
+that kills the branch target is worse than one that leaks an instruction — but the
+correct answer was never "one cycle". It was "two cycles, correctly aligned".
+
+**Fix:** a one-cycle delay line instead of a counter.
+
+```systemverilog
+logic flush_delayed;
+always_ff @(posedge clk_75) begin
+    if (sys_reset)      flush_delayed <= 1'b0;
+    else if (~stall)    flush_delayed <= ex_if_use_target;
+end
+
+logic flush;
+assign flush = ex_if_use_target | flush_delayed;
+```
+
+Three properties make it land where the counter did not. It is an echo of `use_target`
+rather than an independent count, so it cannot drift. It is anchored to the same edge the
+redirect fires, which is the same edge `B+4` sits in ID. And `~stall` freezes it with the
+pipeline, so the window holds position instead of sliding past the instructions it exists
+to kill — the same `~stall` that gates the ID→EX register, because the flush and the
+pipeline have to move together or not at all.
+
+The five control signals then gate on `flush` instead of `ex_if_use_target`.
+
+**How it was caught.** A PC trace again, but this time printing the fetched instruction
+word beside the PC, which is what made both bugs visible as plain contradictions:
+
+- Bug A: `pc=164` held constant across a stall while `inst` changed from `0010f093`
+  (`andi`) to `fe009ce3` (`bne`). The PC frozen and the instruction moving is only
+  possible if they are separate registers and only one of them is being held.
+- Bug B: `use_target=1` on the line for `pc=76`, then the next line is `pc=80` with `x3`
+  changing to `0xc` — that is `addi x3, x0, 12` at address 80 executing — and only then
+  does `pc=156`, the target, appear. Two lines between the redirect and the target, not
+  one.
+
+`x3` becoming `0xc` had been in every trace I took, from the very first one, and I read
+past it four times because x3 is a scratch register and the value looked harmless.
+
+**Why the earlier programs survived both.** The same reason as the flush bug the day
+before: the data was forgiving.
+
+- **Echo survived bug A** because after the byte is read, STATUS is `0`. The `andi` masks
+  `0` down to `0`. Losing the instruction changed nothing at all.
+- **Echo survived bug B** because the leaked instruction wrote a scratch register that
+  was overwritten before anything read it.
+- **Fibonacci survived both** because co-simulation compares final register state, and
+  the leaked instructions were arithmetic recomputed on the next loop pass.
+
+The command interpreter broke because STATUS was `6` this time — the receiver flag still
+set — and because the leaked instruction was a `beq` inside a chain of `beq`s, the one
+context where a stray instruction can steer the program somewhere else entirely.
+
+**What this says about the verification.** Second time in two days that a bug lived
+through weeks of passing tests because the programs happened not to expose it. The
+pattern is the same and worth naming: a test that passes tells you the output matched, not
+that the design is correct. Echo passed with two live bugs in the fetch path. It would
+have kept passing.
+
+The thing that changed the odds was writing a program with different *shapes* in it — a
+peripheral read that cannot be recomputed, a nonzero status word, a chain of branches
+where control flow is the thing under test. Not more tests. Different ones.
