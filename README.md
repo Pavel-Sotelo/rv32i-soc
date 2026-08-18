@@ -26,6 +26,11 @@ register between them so the transmitter is never overwritten mid-byte, printing
 readable text to the terminal. Fibonacci stays as the co-simulation proof; the
 string-sender becomes the full-peripheral hardware showcase.
 
+*Update, 17 August:* the string-sender demo was superseded by an interactive
+command interpreter — five commands over UART, running on hardware. Full write-up
+and images to follow. The current build misses setup by 44 ps on one path
+(WNS −0.044 ns, 1 of 2997 endpoints). Runs correctly on hardware.
+
 ![Fibonacci result in the terminal](docs/images/putty_fibonacci.png)
 *`F(12) = 233 = 0xE9` received over the UART, rendered as é in Latin-1. Each
 character is one reset — the program computes Fibonacci and transmits the result
@@ -67,10 +72,10 @@ talks to the peripheral over a real, standard bus interconnect, not ad-hoc wires
 - [x] Fibonacci in co-simulation — RTL and ISS agree, F(12) = 233
 - [x] MMCM clock generation — 100 MHz board clock → 75 MHz core, reset gated on lock
 - [x] **Fibonacci running on hardware — result transmitted over UART to a terminal**
-- [ ] String-sender demo — multiple bytes with STATUS polling (readable text in the terminal)
-- [ ] CPI measured on Fibonacci; SoC Fmax re-measured via stress test
+- [x] **Command interpreter running on hardware — five commands, interactive over UART**
+- [ ] CPI measured on the command loop; SoC Fmax re-measured via stress test
 - [ ] Python regression script — every testbench, PASS/FAIL summary
-- [ ] SoC block diagram, ISA table, register map for the final README
+- [ ] SoC block diagram, ISA table, register map, final READMEs
 
 ## Structure
 - `rtl/` — SystemVerilog source

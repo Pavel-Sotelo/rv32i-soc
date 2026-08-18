@@ -115,7 +115,7 @@ and the problem was mux selection rather than timing.
 
 ---
 
-## 2026-08-17 — Branch flush killed one instruction too many, and it took three days
+## 2026-08-16 — Branch flush killed one instruction too many, and it took three days
 
 **Module:** `rv32i_top.sv`
 
