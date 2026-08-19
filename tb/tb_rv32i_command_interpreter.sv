@@ -64,6 +64,46 @@ module tb_rv32i_command_interpreter();
         end
         
         
+        //CPI measurement per command
+        longint cmd_cycles = 0;
+        longint cmd_retired = 0;
+        logic measuring = 0;
+    
+        wire retire = (DUT.id_ex_reg_write | DUT.id_ex_write_mem | DUT.id_ex_branch) & ~DUT.stall;
+    
+        always_ff @(posedge DUT.clk_75) begin
+        
+            if (!DUT.sys_reset) begin
+    
+                //arm on a freshly received byte
+                if (DUT.slave_inst.done_rising && !measuring) begin
+                    measuring   <= 1;
+                    cmd_cycles  <= 0;
+                    cmd_retired <= 0;
+                    
+                end else if (measuring) begin
+    
+                    //stop when the reply is handed to the transmitter
+                    if (DUT.slave_inst.tx_start) begin
+                    
+                        measuring <= 0;
+                        $display("CPI: cycles=%0d retired=%0d CPI=%0.3f MIPS=%0.1f", cmd_cycles, cmd_retired, real'(cmd_cycles)/real'(cmd_retired), 75.0/(real'(cmd_cycles)/real'(cmd_retired)));
+                        
+                    end
+                    
+                    else begin
+                    
+                        cmd_cycles <= cmd_cycles + 1;
+                        if (retire) cmd_retired <= cmd_retired + 1;
+                        
+                    end
+    
+                end
+    
+            end
+        end
+            
+        
         //send_serial task: drives one 8N1 frame onto rx, start bit low, 8 data bits, LSB first, stop bit high,
         //each held for one bit period. The CPU cannot produce its own input, so the testbench plays the part of the terminal.
         task send_serial(input logic [7:0] b);
