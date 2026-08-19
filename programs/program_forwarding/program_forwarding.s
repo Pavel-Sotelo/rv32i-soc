@@ -7,3 +7,4 @@ addi x4, x0, 42
 sw   x4, 0(x0)          # rs2 forwarding on store data, 1-back
 lw   x5, 0(x0)          # x5 = 42
 addi x6, x5, 3          # LOAD forwarded, 1-back: x6 = 45
+beq x0,x0,0             # PC halt
