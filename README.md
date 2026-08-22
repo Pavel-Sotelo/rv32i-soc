@@ -20,16 +20,11 @@ integration does not — the added AXI and stall logic push the critical path pa
 generated at 75 MHz by an on-chip MMCM, closing with +0.739 ns of margin. Details in
 [Design decisions](#design-decisions-for-the-hardware-soc).
 
-*Next:* a more robust program that exercises all three of the UART's memory-mapped
-AXI registers — a string-sender that writes bytes to TX_DATA and polls the STATUS
-register between them so the transmitter is never overwritten mid-byte, printing
-readable text to the terminal. Fibonacci stays as the co-simulation proof; the
-string-sender becomes the full-peripheral hardware showcase.
-
-*Update, 17 August:* the string-sender demo was superseded by an interactive
-command interpreter — five commands over UART, running on hardware. Full write-up
-and images to follow. The current build misses setup by 44 ps on one path
-(WNS −0.044 ns, 1 of 2997 endpoints). Runs correctly on hardware.
+*Update, 19 August:* the SoC now runs an interactive command interpreter — five
+commands over UART, answering typed input on hardware. The build closes timing at
+75 MHz with +0.305 ns of margin, 0 of 2997 failing endpoints; see
+[Timing and Fmax](#timing-and-fmax). CPI is measured across three workloads; see
+[Performance: CPI](#performance-cpi).
 
 ![Fibonacci result in the terminal](docs/images/putty_fibonacci.png)
 *`F(12) = 233 = 0xE9` received over the UART, rendered as é in Latin-1. Each
@@ -74,6 +69,7 @@ talks to the peripheral over a real, standard bus interconnect, not ad-hoc wires
 - [x] **Fibonacci running on hardware — result transmitted over UART to a terminal**
 - [x] **Command interpreter running on hardware — five commands, interactive over UART**
 - [x] **CPI measured — forwarding 1.125, Fibonacci 1.348, command interpreter 1.54–2.12**
+- [x] **Timing closed on the integrated SoC — WNS +0.305 ns, 0 failing endpoints at 75 MHz**
 - [ ] SoC Fmax re-measured via stress test
 - [ ] Python regression script — every testbench, PASS/FAIL summary
 - [ ] SoC block diagram, ISA table, register map, final READMEs
@@ -103,16 +99,18 @@ per-module bug logs.
 **Next, in order.** These are refinements and demos on top of a working SoC, not
 missing pieces of it:
 
-- **String-sender demo.** Fibonacci sends one byte; a richer program sends several,
-  polling the UART's STATUS register between characters so the transmitter is never
-  overwritten mid-byte. This exercises the whole SoC — repeated stores across the
-  bus, STATUS reads back across it, the stall — and prints readable text. Fibonacci
-  stays as the co-simulation proof (it has a hand-checkable answer); the
-  string-sender becomes the hardware showcase.
-- **Measurements.** CPI on Fibonacci (the 2-cycle branch penalty becomes a number),
-  and the SoC's Fmax re-measured with the same stress-test bisection used on the
-  CPU alone — the integrated design's critical path is slower, and quantifying that
-  gap is the point.
+- **Command interpreter (done).** A 43-instruction program that polls the UART's
+  STATUS register for a received byte, dispatches on it, and replies. Five commands:
+  `f` computes and sends F(12), `c` sends an incrementing counter, `p` echoes the last
+  non-command byte typed, `z` reports whether the counter has moved, and any other
+  byte is uppercased and returned. It exercises the whole SoC in both directions —
+  loads from RX_DATA and STATUS across the bus, stores to TX_DATA, and the pipeline
+  stall on every peripheral read. Fibonacci stays as the co-simulation proof, since
+  it has a hand-checkable answer.
+- **Measurements.** CPI is measured across three workloads (see
+  [Performance: CPI](#performance-cpi)). Still open: the SoC's Fmax re-measured with
+  the same stress-test bisection used on the CPU alone — the integrated design's
+  critical path is slower, and quantifying that gap is the point.
 - **Automation and docs.** A Python regression runner over every testbench, plus a
   SoC block diagram, ISA table and register map for the final README.
 
@@ -371,6 +369,44 @@ formula only ever gives a floor.
 How much harder the tool works is visible in the endpoint count: 704 at 10 ns
 against 1964 at 6.631 ns. Under pressure it replicates registers and splits logic
 that it was content to share when the constraint was loose.
+
+### Closing the integrated SoC: the strategy mattered more than the RTL
+
+The default implementation strategy misses setup by 44 ps on one endpoint. Switching
+to `Performance_ExplorePostRoutePhysOpt` closes the same RTL with 0.305 ns to spare.
+Nothing in the design changed between these two builds:
+
+| | Vivado Implementation Defaults | Performance_ExplorePostRoutePhysOpt |
+|---|---|---|
+| WNS | **−0.044 ns** | **+0.305 ns** |
+| failing endpoints | 1 / 2997 | 0 / 2997 |
+| WHS | +0.086 ns | +0.137 ns |
+| logic levels on the critical path | 23 | 17 |
+| logic delay | 6.500 ns | 5.148 ns |
+| net delay | 6.759 ns | 7.762 ns |
+| high fanout | 41 | 101 |
+
+**The wires got worse and it still won.** Net delay rose by a full nanosecond, but the
+tool removed six levels of logic and 1.352 ns of gate delay, which more than paid for
+it. The fanout jump from 41 to 101 is the mechanism showing through: post-route
+physical optimisation restructured and replicated cells along the path. This was not
+placement luck — it was logic optimisation, and it is why changing the strategy was
+worth trying before touching the RTL.
+
+**The critical path is not where I assumed.** It runs from the data memory's block RAM
+output register, through 17–23 levels of logic, to the PC register — a load feeding an
+address computation, not the branch-flush term I expected. At 6.5 ns of logic against
+6.8 ns of net delay in the default build it is roughly balanced, unlike the CPU-only
+path measured on 30 July, which was 4.796 ns of net delay out of 5.814 ns. Integration
+changed the shape of the problem.
+
+**What this does and does not mean.** The design closes at 75 MHz and runs correctly on
+hardware, but +0.305 ns is 2% of the clock period, and the fact that a tool could find
+six levels of logic to remove suggests the path is structurally too deep. Registering
+`pc_target` and moving to a 3-cycle flush remains the real fix, deferred to v2.
+Reporting the strategy alongside the number is part of the measurement: a build that
+closes under one strategy and fails under another has thin margin, and saying so is
+more useful than quoting only the passing figure.
 
 ## Performance: CPI
 
