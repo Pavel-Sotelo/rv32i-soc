@@ -73,7 +73,8 @@ talks to the peripheral over a real, standard bus interconnect, not ad-hoc wires
 - [x] MMCM clock generation — 100 MHz board clock → 75 MHz core, reset gated on lock
 - [x] **Fibonacci running on hardware — result transmitted over UART to a terminal**
 - [x] **Command interpreter running on hardware — five commands, interactive over UART**
-- [ ] CPI measured on the command loop; SoC Fmax re-measured via stress test
+- [x] **CPI measured — forwarding 1.125, Fibonacci 1.348, command interpreter 1.54–2.12**
+- [ ] SoC Fmax re-measured via stress test
 - [ ] Python regression script — every testbench, PASS/FAIL summary
 - [ ] SoC block diagram, ISA table, register map, final READMEs
 
@@ -247,7 +248,9 @@ spend, and forwarding lands directly on the EX path later, which would only make
 the merged version worse.
 
 So I kept 4 stages and chose frequency over CPI: I pay a 2-cycle branch penalty
-in exchange for timing closure with margin.
+in exchange for timing closure with margin. That penalty is no longer just an
+argument — it is measured at 0.348 CPI on a branch-heavy loop; see
+[Performance: CPI](#performance-cpi).
 
 **One more thing the report showed.** The worst path has only 2 levels of logic,
 and 4.796 ns of its 5.814 ns total is net delay — wires, not gates — on a signal
@@ -368,6 +371,73 @@ formula only ever gives a floor.
 How much harder the tool works is visible in the endpoint count: 704 at 10 ns
 against 1964 at 6.631 ns. Under pressure it replicates registers and splits logic
 that it was content to share when the constraint was loose.
+
+## Performance: CPI
+
+Fmax alone does not describe a processor. Execution time is
+`instructions × CPI × clock period` — the clock sets the period, the
+microarchitecture sets the CPI. The section above measures the first factor;
+this one measures the second.
+
+Cycles and retired instructions are counted in the testbench on `clk_75`. An
+instruction counts as retired when it leaves EX on the correct path — EX is
+where every architectural effect happens in this core, so `reg_write` covers
+ALU ops, loads, `lui`, `jal` and nops, `write_mem` covers stores, and `branch`
+covers `beq`/`bne`. Counting `reg_write` alone would undercount, since stores
+and branches retire without writing a register. Flushed shadow instructions and
+stall bubbles have all three signals low and so exclude themselves; the
+`~stall` gate makes a load frozen on AXI count once, on the cycle it finally
+advances.
+
+| program | cycles | retired | CPI | MIPS | what it measures |
+|---|---|---|---|---|---|
+| forwarding test | 9 | 8 | **1.125** | 66.7 | near-ideal — every hazard path, no stall |
+| Fibonacci | 89 | 66 | **1.348** | 55.6 | branch cost — 11 taken branches |
+| command interpreter | 31–117 | 16–76 | **1.54–2.12** | 35–49 | full system — AXI peripheral in the path |
+
+**Forwarding test — 1.125.** Eight back-to-back dependent instructions covering
+every forwarding path, including a load-use pair, retire at one per cycle. The
+0.125 above ideal is pipeline fill, not a hazard: no dependency in this program
+costs a single stall cycle. This is the measurement behind the claim in
+[Data hazards](#data-hazards) that load-use needs no stall.
+
+**Fibonacci — 1.348.** 66 instructions in 89 cycles. The 66 matches the
+program's instruction count by hand (4 setup + 5 × 12 loop + 2 output), which
+confirms the retirement signal is counting the right thing. Of the 23 cycles
+above ideal, 22 are the eleven taken branches at two cycles each and one is
+pipeline fill — the overhead is fully accounted for. The analytical model
+`CPI ≈ 1 + 2b` with `b = 11/66` predicts 1.33 against a measured 1.348.
+
+**This is the price of the 4-stage choice.** The 2-cycle branch penalty argued
+for in [Why I kept 4 stages](#why-i-kept-4-stages-instead-of-merging-id-and-ex)
+costs 0.348 CPI on this workload. A 3-stage pipeline would have halved it — and
+would not have closed timing.
+
+**Command interpreter — 1.54 to 2.12, per command.** Seven commands, each
+measured over a defined window: from the received byte becoming available to
+the reply being handed to the transmitter. Every command pays a near-constant
+peripheral tax — an RX_DATA read and a STATUS poll, each a UART load that
+stalls the pipeline 4–5 cycles on AXI — so the short commands, which are almost
+nothing but peripheral access, score worst. The heaviest command `'f'` has the
+*best* CPI at 1.539 despite running 76 instructions, because that fixed cost is
+amortised across a long compute loop. It sits just above Fibonacci's 1.348, as
+it should: the same loop, plus the UART reads and the dispatch chain.
+
+**On the measurement window.** The interpreter's figure deliberately excludes
+the idle poll loop where the CPU waits for a human to type. Including it would
+put CPI in the hundreds and would be measuring the baud rate, not the
+processor. The window is stated because the choice of window changes the number
+by orders of magnitude.
+
+**No average is reported.** These three programs answer different questions —
+pipeline quality, branch cost, system cost — and collapsing them into one
+figure would describe none of them. Every CPI figure here is quoted with the
+workload attached, because a CPI without a program is not a measurement.
+
+**Deferred to v2.** The production way to measure this is the RISC-V `mcycle`
+and `minstret` CSRs, read by the program itself rather than by the testbench.
+That needs the Zicsr instructions, which this core does not implement. The
+testbench counters give the identical number with no new ISA work.
 
 ## Why each memory synthesises differently
 
